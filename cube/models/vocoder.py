@@ -16,9 +16,9 @@
 import torch
 import tqdm
 import numpy as np
-from models.clarinet.wavenet import Wavenet
-from models.clarinet.modules import GaussianLoss, stft, KL_Loss
-from models.clarinet.wavenet_iaf import Wavenet_Student
+from cube.models.clarinet.wavenet import Wavenet
+from cube.models.clarinet.modules import GaussianLoss, stft, KL_Loss
+from cube.models.clarinet.wavenet_iaf import Wavenet_Student
 from torch.distributions.normal import Normal
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
