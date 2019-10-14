@@ -1,8 +1,8 @@
 import torch
 import tqdm
 from torch import nn
-from models.clarinet.modules import Conv, ResBlock
-from models.clarinet.loss import sample_from_gaussian
+from cube.models.clarinet.modules import Conv, ResBlock
+from cube.models.clarinet.loss import sample_from_gaussian
 
 
 class Wavenet(nn.Module):

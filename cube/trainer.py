@@ -373,7 +373,6 @@ if __name__ == '__main__':
         trainer = Trainer(encoder, trainset, devset)
         trainer.start_training(10, 1000, params)
 
-
     def phase_4_train_pvocoder(params):
         from io_modules.dataset import Dataset
         from models.vocoder import WavenetVocoder

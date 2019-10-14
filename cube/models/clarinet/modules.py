@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.clarinet.loss import gaussian_loss, KL_gaussians
+from cube.models.clarinet.loss import gaussian_loss, KL_gaussians
 import numpy as np
 import math
 
