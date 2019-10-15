@@ -23,23 +23,38 @@ class CubeNet(nn.Module):
             self._upsample_conv.append(convt)
             self._upsample_conv.append(nn.LeakyReLU(0.4))
 
-        self._lstm = nn.LSTM(mgc_size + output_size + ext_conditioning_size, lstm_size, bidirectional=False,
+        self._lstm = nn.LSTM(mgc_size + output_size * 2 + ext_conditioning_size, lstm_size, bidirectional=False,
                              num_layers=lstm_layers)
         self._output_mean = nn.Linear(lstm_size, output_size)
         self._output_logvar = nn.Linear(lstm_size, output_size)
 
-    def forward(self, mgc, ext_conditioning=None, temperature=1.0, gs_x=None):
+    def forward(self, mgc, ext_conditioning=None, temperature=1.0, x=None):
+        mgc = self._upsample(mgc)
+
         zeros = np.zeros((mgc.shape[0], mgc.shape[1], self._output_size))
         ones = np.ones((mgc.shape[0], mgc.shape[1], self._output_size))
 
         q_0 = Normal(torch.tensor(zeros, dtype=torch.float32).to(mgc.device.type),
                      torch.tensor(ones, dtype=torch.float32).to(mgc.device.type))
         z = q_0.sample() * temperature
-        from ipdb import set_trace
-        set_trace()
-        mgc = self.upsample(mgc)
 
-    def upsample(self, c):
+        # we don't handle external conditioning yet
+        x_list = []
+        # x = torch.cat((torch.zeros(x.shape[0], 1, x.shape[2]), x), dim=1)
+        x_list.append(torch.zeros(x.shape[0], 1, self._output_size))
+        for ii in range(x.shape[1]):
+            for jj in range(x.shape[2] // self._output_size):
+                x_list.append(x[:, ii, jj * self._output_size:jj * self._output_size + self._output_size].unsqueeze(1))
+        x_list.pop(-1)
+        x = torch.cat(x_list, dim=1)
+        lstm_input = torch.cat((x, mgc, z), dim=2)
+        output, hidden = self._lstm(lstm_input.permute(1, 0, 2))
+        output = output.permute(1, 0, 2)
+        mean = self._output_mean(output)
+        logvar = self._output_logvar(output)
+        return mean, logvar, self._reparameterize(mean, logvar)
+
+    def _upsample(self, c):
         c = c.permute(0, 2, 1)
 
         if self._upsample_conv is not None:
@@ -52,10 +67,26 @@ class CubeNet(nn.Module):
         c = c.permute(0, 2, 1)
         return c
 
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+
+    def _reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
 
 class DiscriminatorWavenet(nn.Module):
     def __init__(self, mgc_size=80):
         super(DiscriminatorWavenet, self).__init__()
+        # self._model = Wavenet(kernel_size=2,
+        #                       num_layers=11,
+        #                       residual_channels=8,
+        #                       gate_channels=16,
+        #                       skip_channels=8,
+        #                       cin_channels=mgc_size,
+        #                       out_channels=1,
+        #                       upsample_scales=[16, 16])
         self._model = Wavenet(kernel_size=2,
                               num_layers=11,
                               residual_channels=128,
@@ -67,6 +98,9 @@ class DiscriminatorWavenet(nn.Module):
 
     def forward(self, signal, mgc):
         return torch.sigmoid(self._model(signal, mgc))
+
+    def save(self, path):
+        torch.save(self.state_dict(), path)
 
 
 class DataLoader:
@@ -132,9 +166,41 @@ def _start_train(params):
     optimizer_gen = torch.optim.Adam(cubenet.parameters())
     optimizer_dis = torch.optim.Adam(discnet.parameters())
 
+    bce_loss = torch.nn.BCELoss()
+    test_steps = 2
+    global_step = 0
+
     while patience_left > 0:
-        x, mgc = trainset.get_batch(batch_size=params.batch_size)
-        output = cubenet(mgc, gs_x=x)
+        total_loss_disc = 0
+        total_loss_gen = 0
+        for step in range(test_steps):
+            global_step += 1
+            x, mgc = trainset.get_batch(batch_size=params.batch_size)
+            mean, logvar, pred_y = cubenet(mgc, x=x)
+            outputs_real = discnet(x.view(x.shape[0], -1).unsqueeze(1), mgc.permute(0, 2, 1))
+            outputs_synt = discnet(pred_y.detach().view(x.shape[0], -1).unsqueeze(1), mgc.permute(0, 2, 1))
+            outputs_real = outputs_real[:, :, 0]
+            outputs_synt = outputs_synt[:, :, 0]
+
+            tgt_real = torch.ones(outputs_real.size())
+            tgt_synt = torch.zeros(outputs_real.size())
+            loss = bce_loss(outputs_real, tgt_real) + bce_loss(outputs_synt, tgt_synt)
+            total_loss_disc += loss.item()
+            optimizer_dis.zero_grad()
+            loss.backward()
+            optimizer_dis.step()
+            outputs_synt = discnet(pred_y.view(x.shape[0], -1).unsqueeze(1), mgc.permute(0, 2, 1))
+            outputs_synt = outputs_synt[:, :, 0]
+            loss = bce_loss(outputs_synt, tgt_real)
+            optimizer_gen.zero_grad()
+            loss.backward()
+            optimizer_gen.step()
+            total_loss_gen += loss.item()
+        sys.stdout.write('Global step {0} D_LOSS={1} G_LOSS={2}\n'.format(global_step, total_loss_disc / test_steps,
+                                                                          total_loss_gen / test_steps))
+
+        discnet.save('data/disc.last')
+        cubenet.save('data/cube.last')
 
 
 if __name__ == '__main__':
