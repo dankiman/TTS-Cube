@@ -8,6 +8,7 @@ import tqdm
 sys.path.append('')
 from torch.distributions.normal import Normal
 from cube.models.clarinet.wavenet import Wavenet
+from cube.io_modules.dataset import Dataset
 
 
 class CubeNet(nn.Module):
@@ -25,7 +26,9 @@ class CubeNet(nn.Module):
             self._upsample_conv.append(nn.LeakyReLU(0.4))
 
         lstm_list = [nn.LSTM(mgc_size + output_size * 2 + ext_conditioning_size, lstm_size, bidirectional=False,
-                             num_layers=1) for _ in range(lstm_layers)]
+                             num_layers=1)]
+        [lstm_list.append(nn.LSTM(mgc_size + output_size + ext_conditioning_size, lstm_size, bidirectional=False,
+                                  num_layers=1)) for _ in range(lstm_layers - 1)]
         self._lstm_list = nn.ModuleList(lstm_list)
         self._output_mean = nn.ModuleList([nn.Linear(lstm_size, output_size) for _ in range(lstm_layers)])
         self._output_logvar = nn.ModuleList([nn.Linear(lstm_size, output_size) for _ in range(lstm_layers)])
@@ -52,7 +55,10 @@ class CubeNet(nn.Module):
         zz = z
         first = True
         for lstm, output_mean, output_logvar in zip(self._lstm_list, self._output_mean, self._output_logvar):
-            lstm_input = torch.cat((x, mgc, zz), dim=2)
+            if first:
+                lstm_input = torch.cat((x, mgc, zz), dim=2)
+            else:
+                lstm_input = torch.cat((mgc, zz), dim=2)
             output, hidden = lstm(lstm_input.permute(1, 0, 2))
             output = output.permute(1, 0, 2)
             mean = output_mean(output)
@@ -85,7 +91,7 @@ class CubeNet(nn.Module):
         self.load_state_dict(torch.load(path, map_location='cpu'))
 
     def _reparameterize(self, mu, logvar, eps):
-        std = torch.exp(0.5 * logvar)
+        std = torch.exp(logvar)
         return mu + eps * std
 
 
@@ -174,10 +180,11 @@ cstft = STFT(filter_length=512, hop_length=128).to('cuda:0')
 def stft(y, scale='linear'):
     D = cstft(y.unsqueeze(0).unsqueeze(0))
     # D = stft(y, n_fft=512, hop_length=128, win_length=512, window=torch.hamming_window(512).cuda())
-    real = D[0].squeeze(0).unsqueeze(2)
-    imag = D[1].squeeze(0).unsqueeze(2)
-    D = torch.cat((real, imag), dim=2)
-    D = torch.sqrt(D.pow(2).sum(-1) + 1e-10)
+    real = D[0].squeeze(0).unsqueeze(2).pow(2)
+    imag = D[1].squeeze(0).unsqueeze(2).pow(2)
+    # D = torch.cat((real, imag), dim=2)
+    # D = torch.sqrt(D.pow(2).sum(-1) + 1e-10)
+    D = torch.sqrt(real + imag + 1e-10)
     # D = torch.sqrt(torch.clamp(D.pow(2).sum(-1), min=1e-10))
     if scale == 'linear':
         return D
@@ -239,41 +246,48 @@ def _start_train(params):
         for step in progress:
             global_step += 1
             x, mgc = trainset.get_batch(batch_size=params.batch_size)
-            from ipdb import set_trace
-            set_trace()
+            # from ipdb import set_trace
+            # set_trace()
             mean, logvar, pred_y = cubenet(mgc, x=x)
-            # outputs_real = discnet(x.view(x.shape[0], -1).unsqueeze(1), mgc.permute(0, 2, 1))
-            # outputs_synt = discnet(pred_y.detach().view(x.shape[0], -1).unsqueeze(1), mgc.permute(0, 2, 1))
-            # outputs_real = outputs_real[:, :, -1]
-            # outputs_synt = outputs_synt[:, :, -1]
-            #
-            # tgt_real = torch.ones(outputs_real.size()).to('cuda:0')
-            # tgt_synt = torch.zeros(outputs_real.size()).to('cuda:0')
-            # loss = bce_loss(outputs_real, tgt_real) + bce_loss(outputs_synt, tgt_synt)
-            # total_loss_disc += loss.item()
-            lss_disc = 0.0  # loss.item()
-            # if lss_disc > 0.01:
-            #     optimizer_dis.zero_grad()
-            #     loss.backward()
-            #     torch.nn.utils.clip_grad_norm_(discnet.parameters(), 1.)
-            #     optimizer_dis.step()
-            # outputs_synt = discnet(pred_y.view(x.shape[0], -1).unsqueeze(1), mgc.permute(0, 2, 1))
-            # outputs_synt = outputs_synt[:, :, -1]
-            # loss_bce = bce_loss(outputs_synt, tgt_real)
+            if params.use_gan:
+                outputs_real = discnet(x.view(x.shape[0], -1).unsqueeze(1), mgc.permute(0, 2, 1))
+                outputs_synt = discnet(pred_y.detach().view(x.shape[0], -1).unsqueeze(1), mgc.permute(0, 2, 1))
+                outputs_real = outputs_real[:, :, -1]
+                outputs_synt = outputs_synt[:, :, -1]
+
+                tgt_real = torch.ones(outputs_real.size()).to('cuda:0')
+                tgt_synt = torch.zeros(outputs_real.size()).to('cuda:0')
+                loss = bce_loss(outputs_real, tgt_real) + bce_loss(outputs_synt, tgt_synt)
+                total_loss_disc += loss.item()
+                lss_disc = loss.item()
+                if lss_disc > 0.01:
+                    optimizer_dis.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(discnet.parameters(), 1.)
+                    optimizer_dis.step()
+                outputs_synt = discnet(pred_y.view(x.shape[0], -1).unsqueeze(1), mgc.permute(0, 2, 1))
+                outputs_synt = outputs_synt[:, :, -1]
+                loss_bce = bce_loss(outputs_synt, tgt_real)
+            else:
+                loss_bce = 0.0
+                lss_disc = 0.0
 
             fft_pred = stft(pred_y.view(-1), scale='log')
             fft_orig = stft(x.view(-1), scale='log')
             loss_mse = mse_loss(fft_pred.view(-1), fft_orig.view(-1))
 
             loss_gauss = gaussian_loss(mean, logvar, x)
-            loss = loss_gauss + loss_mse  # + loss_bce  # loss_bce + loss_mse + loss_gauss
+            loss = loss_gauss + loss_mse + loss_bce  # loss_bce + loss_mse + loss_gauss
             optimizer_gen.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(cubenet.parameters(), 1.)
             optimizer_gen.step()
             total_loss_gen += 0.0  # loss_bce.item()
             total_loss_frame += loss_mse.item()
-            lss_gen = 0.0  # loss_bce.item()
+            if params.use_gan:
+                lss_gen = loss_bce.item()
+            else:
+                lss_gen = 0.0
             lss_frm = loss_mse.item()
             lss_gauss = loss_gauss.item()
             total_loss_gauss += lss_gauss
@@ -293,6 +307,21 @@ def _start_train(params):
         cubenet.save('data/cube.last')
 
 
+def _test_synth(params):
+    devset = Dataset("data/processed/dev")
+    devset = DataLoader(devset)
+    cubenet = CubeNet()
+    cubenet.load('data/cube.last')
+    cubenet.to('cuda:0')
+    x, mgc = devset.get_batch(batch_size=params.batch_size)
+    mean, logvar, pred_y = cubenet(mgc, x=x, temperature=0.8)
+    synth = pred_y.view(-1) * 32000
+    from cube.io_modules.dataset import DatasetIO
+    dio = DatasetIO()
+    dio.write_wave('gan.wav', synth.detach().cpu().numpy(), 16000, dtype=np.int16)
+    synth = x.view(-1) * 32000
+    dio.write_wave('orig.wav', synth.detach().cpu().numpy(), 16000, dtype=np.int16)
+
 if __name__ == '__main__':
     parser = optparse.OptionParser()
     parser.add_option('--patience', action='store', dest='patience', default=20, type='int',
@@ -300,6 +329,11 @@ if __name__ == '__main__':
     parser.add_option("--batch-size", action='store', dest='batch_size', default='16', type='int',
                       help='number of samples in a single batch (default=32)')
     parser.add_option("--resume", action='store_true', dest='resume', help='Resume from previous checkpoint')
+    parser.add_option("--use-gan", action='store_true', dest='use_gan', help='Resume from previous checkpoint')
+    parser.add_option("--synth-test", action="store_true", dest="test")
 
     (params, _) = parser.parse_args(sys.argv)
-    _start_train(params)
+    if params.test:
+        _test_synth(params)
+    else:
+        _start_train(params)
