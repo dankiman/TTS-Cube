@@ -14,9 +14,11 @@
 # limitations under the License.
 #
 
-import dynet_config
+# import dynet_config
 import optparse
 import sys
+
+sys.path.append('')
 import numpy as np
 from os.path import exists
 
@@ -41,7 +43,7 @@ def get_file_input(txt_file):
 
 
 def get_phone_input_from_text(text, speaker_identity, g2p=None):
-    from io_modules.dataset import PhoneInfo
+    from cube.io_modules.dataset import PhoneInfo
     speaker = 'SPEAKER:' + speaker_identity
     seq = [PhoneInfo('START', [], 0, 0)]
     if g2p is not None:
@@ -120,8 +122,8 @@ def _render_spectrogram(mgc, output_file):
 
 
 def load_encoder(params, base_path='data/models'):
-    from io_modules.dataset import Encodings
-    from models.encoder import Encoder
+    from cube.io_modules.dataset import Encodings
+    from cube.models.encoder import Encoder
 
     encodings = Encodings()
     encodings.load('%s/encoder.encodings' % base_path)
@@ -133,26 +135,33 @@ def load_encoder(params, base_path='data/models'):
 
 
 def load_vocoder(params, base_path='data/models'):
+    if params.vocoder == 'cube':
+        from cube2.networks.cubenet import CubeNet
+        cube = CubeNet()
+        cube.load('%s/cube_vocoder.network' % base_path)
+        cube.to(params.device)
+        cube.eval()
+        return cube, None
     if params.vocoder == 'clarinet':
-        from models.vocoder import ClarinetVocoder
-        from models.vocoder import WavenetVocoder
+        from cube.models.vocoder import ClarinetVocoder
+        from cube.models.vocoder import WavenetVocoder
         vocoder = WavenetVocoder(params)
         vocoder.load('%s/nn_vocoder' % base_path)
         pvocoder = ClarinetVocoder(params, vocoder=vocoder)
         pvocoder.load('%s/pnn_vocoder' % base_path)
         return pvocoder, None
-      
+
     elif params.vocoder == 'wavenet':
-        from models.vocoder import WavenetVocoder
+        from cube.models.vocoder import WavenetVocoder
         vocoder = WavenetVocoder(params)
         vocoder.load('%s/nn_vocoder' % base_path)
         return vocoder, None
     else:
-        from models.vocoder import WaveGlowVocoder
+        from cube.models.vocoder import WaveGlowVocoder
         vocoder = WaveGlowVocoder(params)
         vocoder.load('%s/waveglow_vocoder.network' % base_path)
         if params.vocoder == 'waveglow_denoised':
-            from models.denoiser import Denoiser
+            from cube.models.denoiser import Denoiser
             denoiser = Denoiser(vocoder.waveglow)
         else:
             denoiser = None
@@ -196,13 +205,14 @@ def synthesize_text(text, encoder, vocoder, speaker_identity, g2p=None):
 
 
 def write_signal_to_file(signal, output_file, params):
-    from io_modules.dataset import DatasetIO
+    from cube.io_modules.dataset import DatasetIO
     dio = DatasetIO()
 
     dio.write_wave(output_file, signal, params.target_sample_rate, dtype=signal.dtype)
 
+
 def synthesize(speaker, input_file, output_file, params, g2p=None):
-    from models.vocoder import device
+    from cube.models.vocoder import device
     print(device)
     print(params)
 
@@ -243,8 +253,10 @@ if __name__ == '__main__':
                       help='Resample input files at this rate (default=24000)', type='int', default=24000)
     parser.add_option('--g2p-model', dest='g2p', action='store',
                       help='Use this G2P model for processing')
+    parser.add_option('--device', dest='device', action='store', default='cuda:0',
+                      help='Use this device')
     parser.add_option('--vocoder', action='store', dest='vocoder', default='clarinet',
-                      choices=['clarinet', 'wavenet', 'waveglow', 'waveglow_denoised'],
+                      choices=['cube', 'clarinet', 'wavenet', 'waveglow', 'waveglow_denoised'],
                       help='What vocoder to use: clarinet, wavenet, waveglow or waveglow_denoised')
 
     (params, _) = parser.parse_args(sys.argv)
@@ -259,13 +271,10 @@ if __name__ == '__main__':
     memory = int(params.memory)
     # for compatibility we have to add this paramater
     params.learning_rate = 0.0001
-    dynet_config.set(mem=memory, random_seed=9)
-    if params.gpu:
-        dynet_config.set_gpu()
 
     if params.g2p is not None:
-        from models.g2p import G2P
-        from io_modules.encodings import Encodings
+        from cube.models.g2p import G2P
+        from cube.io_modules.encodings import Encodings
 
         g2p_encodings = Encodings()
         g2p_encodings.load(params.g2p + '.encodings')

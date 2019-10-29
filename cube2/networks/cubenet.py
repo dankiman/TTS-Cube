@@ -42,7 +42,17 @@ class CubeNet(nn.Module):
         self.rnn = nn.LSTM(256 + 1, lstm_size, num_layers=lstm_layers)
         self.output = nn.Linear(lstm_size, 2)
 
-    def forward(self, mgc, ext_conditioning=None, temperature=1.0, x=None):
+    def synthesize(self, mgc, batch_size=16, temperature=0.8):
+        # from ipdb import set_trace
+        # set_trace()
+        empty_slots = np.zeros(((mgc.shape[0] // batch_size) * batch_size + batch_size - mgc.shape[0], mgc.shape[1]))
+        mgc = np.concatenate((mgc, empty_slots), axis=0)
+        c = torch.tensor(mgc, dtype=torch.float32).view(-1, batch_size, mgc.shape[1]).to(self.output.weight.device.type)
+        _, _, signal = self.forward(c, temperature=temperature, eps_min=-20)
+
+        return np.array(np.clip(signal.detach().cpu().view(-1).numpy(), -1.0, 1.0) * 32500, dtype=np.int16)
+
+    def forward(self, mgc, ext_conditioning=None, temperature=1.0, x=None, eps_min=-7):
         cond = self.upsample(mgc)
         if x is not None:
             x = x.view(x.shape[0], -1)
@@ -69,7 +79,7 @@ class CubeNet(nn.Module):
                 mean = torch.tanh(output[:, :, 0])
                 logvar = output[:, :, 1]
                 eps = torch.randn_like(mean)
-                zz = self._reparameterize(mean, logvar, eps * temperature)
+                zz = self._reparameterize(mean, logvar, eps * temperature, eps_min=eps_min)
                 mean_list.append(mean)
                 logvar_list.append(logvar)
                 zz_list.append(zz)
@@ -87,8 +97,8 @@ class CubeNet(nn.Module):
     def load(self, path):
         self.load_state_dict(torch.load(path, map_location='cpu'))
 
-    def _reparameterize(self, mu, logvar, eps):
-        logvar = torch.clamp(logvar, min=-7)
+    def _reparameterize(self, mu, logvar, eps, eps_min=-7):
+        logvar = torch.clamp(logvar, min=eps_min)
         std = torch.exp(logvar)
         return mu + eps * std
 
@@ -137,13 +147,13 @@ class DataLoader:
         self._frame_index += 1
         return result
 
-    def get_batch(self, batch_size, device='cuda:0'):
+    def get_batch(self, batch_size, mini_batch_size=16, device='cuda:0'):
         batch_mgc = []
         batch_x = []
         while len(batch_mgc) < batch_size:
             mini_batch_mgc = []
             mini_batch_x = []
-            for ii in range(16):
+            for ii in range(mini_batch_size):
                 mgc, x = self._read_next()
                 mini_batch_mgc.append(mgc)
                 mini_batch_x.append(x)
@@ -206,8 +216,11 @@ def _start_train(params):
             progress.set_description('GAUSSIAN_LOSS={0:.4}'.format(lss_gauss))
         sys.stdout.write(
             'Global step {0} GAUSSIAN_LOSS={1:.4}\n'.format(global_step, total_loss_gauss / test_steps))
-
-        cubenet.save('data/cube.last')
+        if not np.isnan(total_loss_gauss):
+            cubenet.save('data/cube.last')
+        else:
+            sys.stdout.write('exiting because of nan loss')
+            sys.exit(0)
 
 
 def _test_synth(params):
@@ -215,10 +228,10 @@ def _test_synth(params):
     devset = DataLoader(devset)
     cubenet = CubeNet()
     cubenet.load('data/cube.last')
-    cubenet.to('cuda:0')
+    cubenet.to(params.device)
     cubenet.eval()
     import time
-    x, mgc = devset.get_batch(batch_size=params.batch_size)
+    x, mgc = devset.get_batch(batch_size=params.batch_size, device=params.device, mini_batch_size=64)
     start = time.time()
     with torch.no_grad():
         mean, logvar, pred_y = cubenet(mgc, temperature=params.temperature)
@@ -243,6 +256,7 @@ if __name__ == '__main__':
     parser.add_option("--use-gan", action='store_true', dest='use_gan', help='Resume from previous checkpoint')
     parser.add_option("--synth-test", action="store_true", dest="test")
     parser.add_option("--temperature", action="store", dest="temperature", type='float', default=1.0)
+    parser.add_option("--device", action="store", dest="device", default='cuda:0')
 
     (params, _) = parser.parse_args(sys.argv)
     if params.test:
