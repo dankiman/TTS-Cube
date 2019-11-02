@@ -24,6 +24,12 @@ class UpsampleNet(nn.Module):
         self.output_transform = nn.Linear(input_size, output_size)
 
     def forward(self, x):
+        if self.training:
+            noise = torch.randn_like(x)
+            noise = noise * 0.01
+            # noise += 1
+            x = x + noise
+        x = torch.clamp(x, min=0, max=1)
         c = x.permute(0, 2, 1)
         if self.upsample_conv is not None:
             # B x 1 x C x T'
@@ -188,7 +194,7 @@ def _start_train(params):
     if params.resume:
         cubenet.load('data/cube.last')
     cubenet.to('cuda:0')
-    optimizer_gen = torch.optim.Adam(cubenet.parameters(), lr=1e-3)
+    optimizer_gen = torch.optim.Adam(cubenet.parameters(), lr=params.lr)
 
     test_steps = 500
     global_step = 0
@@ -198,6 +204,8 @@ def _start_train(params):
         total_loss_gauss = 0.0
         progress = tqdm.tqdm(range(test_steps))
         for step in progress:
+            sys.stdout.flush()
+            sys.stderr.flush()
             global_step += 1
             x, mgc = trainset.get_batch(batch_size=params.batch_size)
             # from ipdb import set_trace
@@ -214,6 +222,9 @@ def _start_train(params):
             total_loss_gauss += lss_gauss
 
             progress.set_description('GAUSSIAN_LOSS={0:.4}'.format(lss_gauss))
+
+        sys.stdout.flush()
+        sys.stderr.flush()
         sys.stdout.write(
             'Global step {0} GAUSSIAN_LOSS={1:.4}\n'.format(global_step, total_loss_gauss / test_steps))
         if not np.isnan(total_loss_gauss):
@@ -234,7 +245,7 @@ def _test_synth(params):
     x, mgc = devset.get_batch(batch_size=params.batch_size, device=params.device, mini_batch_size=64)
     start = time.time()
     with torch.no_grad():
-        mean, logvar, pred_y = cubenet(mgc, temperature=params.temperature)
+        mean, logvar, pred_y = cubenet(mgc, temperature=params.temperature, eps_min=-12)
     end = time.time()
     synth = pred_y.view(-1) * 32000
     from cube.io_modules.dataset import DatasetIO
@@ -257,6 +268,7 @@ if __name__ == '__main__':
     parser.add_option("--synth-test", action="store_true", dest="test")
     parser.add_option("--temperature", action="store", dest="temperature", type='float', default=1.0)
     parser.add_option("--device", action="store", dest="device", default='cuda:0')
+    parser.add_option("--lr", action="store", dest="lr", default=1e-3, type=float)
 
     (params, _) = parser.parse_args(sys.argv)
     if params.test:
