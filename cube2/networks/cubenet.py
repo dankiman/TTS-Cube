@@ -90,7 +90,7 @@ def _eval(model, dataset, params):
             x, mgc = dataset.get_batch(batch_size=params.batch_size)
             mean, logvar, pred_y = model(mgc, x=x)
             loss_gauss = gaussian_loss(mean, logvar, x)
-            lss_gauss = loss_gauss.item()
+            lss_gauss += loss_gauss.item()
     return lss_gauss / 500
 
 
