@@ -1,79 +1,48 @@
+#
+# Author: Tiberiu Boros
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
 import torch
 import torch.nn as nn
-import math
-from torch.nn import Parameter
-import torch.functional as F
-from torch.autograd import Variable
 
 
+class UpsampleNet(nn.Module):
+    def __init__(self, input_size, output_size, upsample_scales):
+        super(UpsampleNet, self).__init__()
+        self.upsample_conv = nn.ModuleList()
+        for s in upsample_scales:
+            convt = nn.ConvTranspose2d(1, 1, (3, 2 * s), padding=(1, s // 2), stride=(1, s))
+            convt = nn.utils.weight_norm(convt)
+            nn.init.kaiming_normal_(convt.weight)
+            self.upsample_conv.append(convt)
+            self.upsample_conv.append(nn.LeakyReLU(0.4))
+        self.output_transform = nn.Linear(input_size, output_size)
 
-class VariationalDropout(nn.Module):
-    def __init__(self, input_size, out_size, log_sigma2=-10, threshold=3):
-        """
-        :param input_size: An int of input size
-        :param log_sigma2: Initial value of log sigma ^ 2.
-               It is crusial for training since it determines initial value of alpha
-        :param threshold: Value for thresholding of validation. If log_alpha > threshold, then weight is zeroed
-        :param out_size: An int of output size
-        """
-        super(VariationalDropout, self).__init__()
-
-        self.input_size = input_size
-        self.out_size = out_size
-
-        self.theta = Parameter(torch.FloatTensor(input_size, out_size))
-        self.bias = Parameter(torch.Tensor(out_size))
-
-        self.log_sigma2 = Parameter(torch.FloatTensor(input_size, out_size).fill_(log_sigma2))
-
-        self.reset_parameters()
-
-        self.k = [0.63576, 1.87320, 1.48695]
-
-        self.threshold = threshold
-
-    def reset_parameters(self):
-        stdv = 1. / math.sqrt(self.out_size)
-
-        self.theta.data.uniform_(-stdv, stdv)
-        self.bias.data.uniform_(-stdv, stdv)
-
-    @staticmethod
-    def clip(input, to=8):
-        input = input.masked_fill(input < -to, -to)
-        input = input.masked_fill(input > to, to)
-
-        return input
-
-    def kld(self, log_alpha):
-
-        first_term = self.k[0] * F.sigmoid(self.k[1] + self.k[2] * log_alpha)
-        second_term = 0.5 * torch.log(1 + torch.exp(-log_alpha))
-
-        return -(first_term - second_term - self.k[0]).sum() / (self.input_size * self.out_size)
-
-    def forward(self, input):
-        """
-        :param input: An float tensor with shape of [batch_size, input_size]
-        :return: An float tensor with shape of [batch_size, out_size] and negative layer-kld estimation
-        """
-
-        log_alpha = self.clip(self.log_sigma2 - t.log(self.theta ** 2))
-        kld = self.kld(log_alpha)
-
-        if not self.training:
-            mask = log_alpha > self.threshold
-            return torch.addmm(self.bias, input, self.theta.masked_fill(mask, 0))
-
-        mu = torch.mm(input, self.theta)
-        std = torch.sqrt(torch.mm(input ** 2, self.log_sigma2.exp()) + 1e-6)
-
-        eps = Variable(torch.randn(*mu.size()))
-        if input.is_cuda:
-            eps = eps.cuda()
-
-        return std * eps + mu + self.bias, kld
-
-    def max_alpha(self):
-        log_alpha = self.log_sigma2 - self.theta ** 2
-        return torch.max(log_alpha.exp())
+    def forward(self, x):
+        if self.training:
+            noise = torch.randn_like(x)
+            noise = noise * 0.01
+            # noise += 1
+            x = x + noise
+        x = torch.clamp(x, min=0, max=1)
+        c = x.permute(0, 2, 1)
+        if self.upsample_conv is not None:
+            # B x 1 x C x T'
+            c = c.unsqueeze(1)
+            for f in self.upsample_conv:
+                c = f(c)
+            # B x C x T
+            c = c.squeeze(1)
+        return self.output_transform(c.permute(0, 2, 1))

@@ -1,3 +1,19 @@
+#
+# Author: Tiberiu Boros
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
 import optparse
 import torch
 import sys
@@ -6,121 +22,8 @@ import numpy as np
 import tqdm
 
 sys.path.append('')
-from torch.distributions.normal import Normal
-from cube.models.clarinet.wavenet import Wavenet
 from cube.io_modules.dataset import Dataset
-
-
-class UpsampleNet(nn.Module):
-    def __init__(self, input_size, output_size, upsample_scales):
-        super(UpsampleNet, self).__init__()
-        self.upsample_conv = nn.ModuleList()
-        for s in upsample_scales:
-            convt = nn.ConvTranspose2d(1, 1, (3, 2 * s), padding=(1, s // 2), stride=(1, s))
-            convt = nn.utils.weight_norm(convt)
-            nn.init.kaiming_normal_(convt.weight)
-            self.upsample_conv.append(convt)
-            self.upsample_conv.append(nn.LeakyReLU(0.4))
-        self.output_transform = nn.Linear(input_size, output_size)
-
-    def forward(self, x):
-        if self.training:
-            noise = torch.randn_like(x)
-            noise = noise * 0.01
-            # noise += 1
-            x = x + noise
-        x = torch.clamp(x, min=0, max=1)
-        c = x.permute(0, 2, 1)
-        if self.upsample_conv is not None:
-            # B x 1 x C x T'
-            c = c.unsqueeze(1)
-            for f in self.upsample_conv:
-                c = f(c)
-            # B x C x T
-            c = c.squeeze(1)
-        return self.output_transform(c.permute(0, 2, 1))
-
-
-class CubeNet(nn.Module):
-    def __init__(self, mgc_size=80, lstm_size=500, lstm_layers=1, upsample_scales=[4, 4, 4, 4]):
-        super(CubeNet, self).__init__()
-        self.upsample = UpsampleNet(mgc_size, 256, upsample_scales)
-        self.rnn = nn.LSTM(256 + 1, lstm_size, num_layers=lstm_layers)
-        self.output = nn.Linear(lstm_size, 2)
-
-    def synthesize(self, mgc, batch_size=16, temperature=0.8):
-        # from ipdb import set_trace
-        # set_trace()
-        empty_slots = np.zeros(((mgc.shape[0] // batch_size) * batch_size + batch_size - mgc.shape[0], mgc.shape[1]))
-        mgc = np.concatenate((mgc, empty_slots), axis=0)
-        c = torch.tensor(mgc, dtype=torch.float32).view(-1, batch_size, mgc.shape[1]).to(self.output.weight.device.type)
-        _, _, signal = self.forward(c, temperature=temperature, eps_min=-20)
-
-        return np.array(np.clip(signal.detach().cpu().view(-1).numpy(), -1.0, 1.0) * 32500, dtype=np.int16)
-
-    def forward(self, mgc, ext_conditioning=None, temperature=1.0, x=None, eps_min=-7):
-        cond = self.upsample(mgc)
-        if x is not None:
-            x = x.view(x.shape[0], -1)
-            x = torch.cat((torch.zeros((x.shape[0], 1), device=x.device.type), x[:, 0:-1]), dim=1)
-            rnn_input = torch.cat((cond, x.unsqueeze(2)), dim=2)
-            rnn_output, _ = self.rnn(rnn_input.permute(1, 0, 2))
-            rnn_output = rnn_output.permute(1, 0, 2)
-            output = self.output(rnn_output)
-            mean = torch.tanh(output[:, :, 0])
-            logvar = output[:, :, 1]
-            eps = torch.randn_like(mean)
-            zz = self._reparameterize(mean, logvar, eps * temperature)
-        else:
-            mean_list = []
-            logvar_list = []
-            zz_list = []
-            hidden = None
-            x = torch.zeros((mgc.shape[0], 1), device=mgc.device.type)
-            for ii in range(cond.shape[1]):
-                rnn_input = torch.cat((cond[:, ii, :].unsqueeze(1), x.unsqueeze(2)), dim=2)
-                rnn_output, hidden = self.rnn(rnn_input.permute(1, 0, 2), hx=hidden)
-                rnn_output = rnn_output.permute(1, 0, 2)
-                output = self.output(rnn_output)
-                mean = torch.tanh(output[:, :, 0])
-                logvar = output[:, :, 1]
-                eps = torch.randn_like(mean)
-                zz = self._reparameterize(mean, logvar, eps * temperature, eps_min=eps_min)
-                mean_list.append(mean)
-                logvar_list.append(logvar)
-                zz_list.append(zz)
-                x = zz
-
-            mean = torch.cat(mean_list, dim=1)
-            logvar = torch.cat(logvar_list, dim=1)
-            zz = torch.cat(zz_list, dim=1)
-
-        return mean, logvar, zz
-
-    def save(self, path):
-        torch.save(self.state_dict(), path)
-
-    def load(self, path):
-        self.load_state_dict(torch.load(path, map_location='cpu'))
-
-    def _reparameterize(self, mu, logvar, eps, eps_min=-7):
-        logvar = torch.clamp(logvar, min=eps_min)
-        std = torch.exp(logvar)
-        return mu + eps * std
-
-
-class DiscriminatorWavenet(nn.Module):
-    def __init__(self, mgc_size=80):
-        super(DiscriminatorWavenet, self).__init__()
-
-    def forward(self, signal, mgc):
-        pass  # return self._model(signal, mgc)
-
-    def save(self, path):
-        torch.save(self.state_dict(), path)
-
-    def load(self, path):
-        self.load_state_dict(torch.load(path, map_location='cpu'))
+from cube2.networks.model import CubeNet
 
 
 class DataLoader:
@@ -179,6 +82,18 @@ def gaussian_loss(mean, logvar, y, log_std_min=-7.0):
     return log_probs.squeeze().mean()
 
 
+def _eval(model, dataset, params):
+    model.eval()
+    lss_gauss = 0
+    with torch.no_grad():
+        for step in tqdm.tqdm(range(100)):
+            x, mgc = dataset.get_batch(batch_size=params.batch_size)
+            mean, logvar, pred_y = model(mgc, x=x)
+            loss_gauss = gaussian_loss(mean, logvar, x)
+            lss_gauss = loss_gauss.item()
+    return lss_gauss / 500
+
+
 def _start_train(params):
     from cube.io_modules.dataset import Dataset
 
@@ -198,7 +113,7 @@ def _start_train(params):
 
     test_steps = 500
     global_step = 0
-
+    best_gloss = _eval(cubenet, devset, params)
     while patience_left > 0:
         cubenet.train()
         total_loss_gauss = 0.0
@@ -223,11 +138,19 @@ def _start_train(params):
 
             progress.set_description('GAUSSIAN_LOSS={0:.4}'.format(lss_gauss))
 
+        g_loss = _eval(cubenet, devset, params)
         sys.stdout.flush()
         sys.stderr.flush()
         sys.stdout.write(
-            'Global step {0} GAUSSIAN_LOSS={1:.4}\n'.format(global_step, total_loss_gauss / test_steps))
+            '\tGlobal step {0} GAUSSIAN_LOSS={1:.4}\n'.format(global_step, total_loss_gauss / test_steps))
+        sys.stdout.write('\tDevset evaluation: {0}\n'.format(g_loss))
+        if g_loss < best_gloss:
+            best_gloss = g_loss
+            sys.stdout.write('\tStoring data/cube.best\n')
+            cubenet.save('data/cube.best')
+
         if not np.isnan(total_loss_gauss):
+            sys.stdout.write('\tStoring data/cube.last\n')
             cubenet.save('data/cube.last')
         else:
             sys.stdout.write('exiting because of nan loss')
@@ -247,11 +170,11 @@ def _test_synth(params):
     with torch.no_grad():
         mean, logvar, pred_y = cubenet(mgc, temperature=params.temperature, eps_min=-12)
     end = time.time()
-    synth = pred_y.view(-1) * 32000
+    synth = torch.clamp(pred_y.view(-1) * 32767, min=-32767, max=32767)
     from cube.io_modules.dataset import DatasetIO
     dio = DatasetIO()
     dio.write_wave('gan.wav', synth.detach().cpu().numpy(), 16000, dtype=np.int16)
-    synth = x.view(-1) * 32000
+    synth = x.view(-1) * 32767
     dio.write_wave('orig.wav', synth.detach().cpu().numpy(), 16000, dtype=np.int16)
     sys.stdout.write(
         'Actual execution time took {0} for {1} seconds of audio.\n'.format(end - start, len(x.view(-1)) / 16000))
