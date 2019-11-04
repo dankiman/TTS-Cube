@@ -91,7 +91,7 @@ def _eval(model, dataset, params):
             mean, logvar, pred_y = model(mgc, x=x)
             loss_gauss = gaussian_loss(mean, logvar, x)
             lss_gauss += loss_gauss.item()
-    return lss_gauss / 500
+    return lss_gauss / 100
 
 
 def _start_train(params):
@@ -161,7 +161,7 @@ def _test_synth(params):
     devset = Dataset("data/processed/dev")
     devset = DataLoader(devset)
     cubenet = CubeNet()
-    cubenet.load('data/cube.last')
+    cubenet.load('data/cube.best')
     cubenet.to(params.device)
     cubenet.eval()
     import time
