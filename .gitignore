@@ -1,3 +1,5 @@
+*.wav
+log*
 *.png
 *.npy
 *.pyc

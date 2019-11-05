@@ -23,44 +23,18 @@ if __name__ == '__main__':
     parser = optparse.OptionParser()
     parser.add_option('--cleanup', action='store_true', dest='cleanup',
                       help='Cleanup temporary training files and start from fresh')
-    parser.add_option('--phase', action='store', dest='phase',
-                      choices=['1', '2', '3', '4'],
-                      help='select phase: 1 - prepare corpus; 2 - train sequential vocoder; 3 - train encoder; '
-                           '4 - train parallel vocoder')
     parser.add_option("--batch-size", action='store', dest='batch_size', default='1000', type='int',
                       help='number of samples in a single batch (default=1000)')
-    parser.add_option("--set-mem", action='store', dest='memory', default='2048', type='int',
-                      help='preallocate memory for batch training (default 2048)')
-    parser.add_option("--autobatch", action='store_true', dest='autobatch',
-                      help='turn on/off dynet autobatching')
-    parser.add_option("--resume", action='store_true', dest='resume',
-                      help='resume from last checkpoint')
-    parser.add_option("--no-guided-attention", action='store_true', dest='no_guided_attention',
-                      help='disable guided attention')
-    parser.add_option("--no-bounds", action='store_true', dest='no_bounds',
-                      help='disable fixed synthesis length')
-    parser.add_option("--use-gpu", action='store_true', dest='gpu',
-                      help='turn on/off GPU support')
-    parser.add_option("--learning-rate", action='store', dest='learning_rate', type='float',
-                      help='Set the learning rate (default: 0.0001)', default='0.0001')
     parser.add_option('--train-folder', action='store', dest='train_folder',
                       help='Location of the training files')
     parser.add_option('--dev-folder', action='store', dest='dev_folder',
                       help='Location of the development files')
     parser.add_option('--target-sample-rate', action='store', dest='target_sample_rate',
-                      help='Resample input files at this rate (default=24000)', type='int', default=24000)
+                      help='Resample input files at this rate (default=16000)', type='int', default=16000)
     parser.add_option('--mgc-order', action='store', dest='mgc_order', type='int',
                       help='Order of MGC parameters (default=80)', default=80)
-    parser.add_option('--sparsity-target', action='store', type='int', default='95', dest='sparsity_target',
-                      help='Target sparsity rate for LSTM')
-    parser.add_option('--sparsity-step', action='store', type='int', default='5', dest='sparsity_step',
-                      help='Step size when increasing sparsity')
-    parser.add_option('--sparsity-increase-at', action='store', type='int', default='200', dest='sparsity_increase',
-                      help='Number of files to train on between sparsity increase')
     parser.add_option('--speaker', action='store', dest='speaker', help='Import data under given speaker')
     parser.add_option('--prefix', action='store', dest='prefix', help='Use this prefix when importing files')
-    parser.add_option('--output-at', type='int', dest='output_at', action='store', default=5000,
-                      help='Synthesize after every N files')
     parser.add_option('--g2p-model', dest='g2p', action='store',
                       help='Use this G2P model for processing')
 
@@ -182,8 +156,8 @@ if __name__ == '__main__':
             dev_files_tmp = []
 
         if params.g2p is not None:
-            from models.g2p import G2P
-            from io_modules.encodings import Encodings
+            from cube2.models.g2p import G2P
+            from cube2.io_modules.encodings import Encodings
             g2p_encodings = Encodings()
             g2p_encodings.load(params.g2p + '.encodings')
             g2p = G2P(g2p_encodings)
@@ -219,8 +193,8 @@ if __name__ == '__main__':
 
         dev_files = final_list
         sys.stdout.write(" found " + str(len(dev_files)) + " valid development files\n")
-        from io_modules.dataset import DatasetIO
-        from io_modules.vocoder import MelVocoder
+        from cube2.io_modules.dataset import DatasetIO
+        from cube2.io_modules.vocoder import MelVocoder
         from shutil import copyfile
         dio = DatasetIO()
 
@@ -311,94 +285,4 @@ if __name__ == '__main__':
 
         sys.stdout.write('\n')
 
-
-    def phase_2_train_vocoder(params):
-        from io_modules.dataset import Dataset
-        from models.vocoder import WavenetVocoder
-        from trainers.vocoder import Trainer
-        vocoder = WavenetVocoder(params)
-        if params.resume:
-            sys.stdout.write('Resuming from previous checkpoint\n')
-            vocoder.load('data/models/nn_vocoder')
-        trainset = Dataset("data/processed/train")
-        devset = Dataset("data/processed/dev")
-        sys.stdout.write('Found ' + str(len(trainset.files)) + ' training files and ' + str(
-            len(devset.files)) + ' development files\n')
-        trainer = Trainer(vocoder, trainset, devset)
-        trainer.start_training(20, params.batch_size, params.target_sample_rate)
-
-
-    def phase_3_train_encoder(params):
-        from io_modules.dataset import Dataset
-        from io_modules.dataset import Encodings
-        from models.encoder import Encoder
-        from trainers.encoder import Trainer
-        trainset = Dataset("data/processed/train")
-        devset = Dataset("data/processed/dev")
-        sys.stdout.write('Found ' + str(len(trainset.files)) + ' training files and ' + str(
-            len(devset.files)) + ' development files\n')
-
-        encodings = Encodings()
-        count = 0
-        if not params.resume:
-            for train_file in trainset.files:
-                count += 1
-                if count % 100 == 0:
-                    sys.stdout.write('\r' + str(count) + '/' + str(len(trainset.files)) + ' processed files')
-                    sys.stdout.flush()
-                from io_modules.dataset import DatasetIO
-                dio = DatasetIO()
-                lab_list = dio.read_lab(train_file + ".lab")
-                for entry in lab_list:
-                    encodings.update(entry)
-            sys.stdout.write('\r' + str(count) + '/' + str(len(trainset.files)) + ' processed files\n')
-            sys.stdout.write('Found ' + str(len(encodings.char2int)) + ' unique symbols, ' + str(
-                len(encodings.context2int)) + ' unique features and ' + str(
-                len(encodings.speaker2int)) + ' unique speakers\n')
-            encodings.store('data/models/encoder.encodings')
-        else:
-            encodings.load('data/models/encoder.encodings')
-        if params.resume:
-            runtime = True  # avoid ortonormal initialization
-        else:
-            runtime = False
-        encoder = Encoder(params, encodings, runtime=runtime)
-        if params.resume:
-            sys.stdout.write('Resuming from previous checkpoint\n')
-            encoder.load('data/models/rnn_encoder')
-        if params.no_guided_attention:
-            sys.stdout.write('Disabling guided attention\n')
-        if params.no_bounds:
-            sys.stdout.write('Using internal stopping condition for synthesis\n')
-        trainer = Trainer(encoder, trainset, devset)
-        trainer.start_training(10, 1000, params)
-
-    def phase_4_train_pvocoder(params):
-        from io_modules.dataset import Dataset
-        from models.vocoder import WavenetVocoder
-        from models.vocoder import ClarinetVocoder
-        from trainers.vocoder import Trainer
-        vocoder_wavenet = WavenetVocoder(params)
-        sys.stdout.write('Loading wavenet vocoder\n')
-        vocoder_wavenet.load('data/models/nn_vocoder')
-        vocoder = ClarinetVocoder(params, vocoder_wavenet)
-        if params.resume:
-            sys.stdout.write('Resuming from previous checkpoint\n')
-            vocoder.load('data/models/pnn_vocoder')
-
-        trainset = Dataset("data/processed/train")
-        devset = Dataset("data/processed/dev")
-        sys.stdout.write('Found ' + str(len(trainset.files)) + ' training files and ' + str(
-            len(devset.files)) + ' development files\n')
-        trainer = Trainer(vocoder, trainset, devset, target_output_path='data/models/pnn_vocoder')
-        trainer.start_training(20, params.batch_size, params.target_sample_rate, params=params)
-
-
-    if params.phase and params.phase == '1':
-        phase_1_prepare_corpus(params)
-    if params.phase and params.phase == '2':
-        phase_2_train_vocoder(params)
-    if params.phase and params.phase == '3':
-        phase_3_train_encoder(params)
-    if params.phase and params.phase == '4':
-        phase_4_train_pvocoder(params)
+    phase_1_prepare_corpus(params)

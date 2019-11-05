@@ -22,13 +22,13 @@ import numpy as np
 import tqdm
 
 sys.path.append('')
-from cube.io_modules.dataset import Dataset
+from cube2.io_modules.dataset import Dataset
 from cube2.networks.model import CubeNet
 
 
 class DataLoader:
     def __init__(self, dataset):
-        from cube.io_modules.dataset import DatasetIO
+        from cube2.io_modules.dataset import DatasetIO
         self._dio = DatasetIO()
         self._dataset = dataset
         self._file_index = 0
@@ -95,7 +95,7 @@ def _eval(model, dataset, params):
 
 
 def _start_train(params):
-    from cube.io_modules.dataset import Dataset
+    from cube2.io_modules.dataset import Dataset
 
     trainset = Dataset("data/processed/train")
     devset = Dataset("data/processed/dev")
@@ -171,7 +171,7 @@ def _test_synth(params):
         mean, logvar, pred_y = cubenet(mgc, temperature=params.temperature, eps_min=-12)
     end = time.time()
     synth = torch.clamp(pred_y.view(-1) * 32767, min=-32767, max=32767)
-    from cube.io_modules.dataset import DatasetIO
+    from cube2.io_modules.dataset import DatasetIO
     dio = DatasetIO()
     dio.write_wave('gan.wav', synth.detach().cpu().numpy(), 16000, dtype=np.int16)
     synth = x.view(-1) * 32767
