@@ -91,7 +91,7 @@ class CubeNetOLD(nn.Module):
 
 class CubeNet(nn.Module):
     def __init__(self, mgc_size=80, lstm_size=500, lstm_layers=1, upsample_scales_input=[4, 4, 4],
-                 upsample_scales_output=[2, 2], output_samples=4):
+                 output_samples=4):
         super(CubeNet, self).__init__()
         self.output_samples = output_samples
         self.upsample_input = UpsampleNet(mgc_size, 256, upsample_scales_input)
