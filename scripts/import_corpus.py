@@ -18,6 +18,7 @@ import dynet_config
 import optparse
 import sys
 import numpy as np
+sys.path.append('')
 
 if __name__ == '__main__':
     parser = optparse.OptionParser()
@@ -40,16 +41,6 @@ if __name__ == '__main__':
 
     (params, _) = parser.parse_args(sys.argv)
 
-    memory = int(params.memory)
-    if params.autobatch:
-        autobatch = True
-    else:
-        autobatch = False
-    dynet_config.set(mem=memory, random_seed=9, autobatch=autobatch)
-    if params.gpu:
-        dynet_config.set_gpu()
-
-
     def array2file(a, filename):
         np.save(filename, a)
 
@@ -70,9 +61,9 @@ if __name__ == '__main__':
 
                 color = val * 255
                 bitmap[mgc.shape[1] - y - 1, x] = [color, color, color]
-        import scipy.misc as smp
+        from PIL import Image
 
-        img = smp.toimage(bitmap)
+        img = Image.fromarray(bitmap)#smp.toimage(bitmap)
         img.save(output_file)
 
 

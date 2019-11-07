@@ -23,7 +23,7 @@ import tqdm
 
 sys.path.append('')
 from cube2.io_modules.dataset import Dataset
-from cube2.networks.model import CubeNet
+from cube2.networks.vocoder import CubeNet
 
 
 class DataLoader:

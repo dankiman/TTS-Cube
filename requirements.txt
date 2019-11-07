@@ -8,3 +8,4 @@ Flask
 #dynet==2.1
 torch
 tqdm
+pillow
