@@ -51,7 +51,7 @@ class UpsampleNet(nn.Module):
 
 class Attention(nn.Module):
     def __init__(self, enc_hid_dim, dec_hid_dim):
-        super().__init__()
+        super(Attention, self).__init__()
 
         self.enc_hid_dim = enc_hid_dim
         self.dec_hid_dim = dec_hid_dim
@@ -59,26 +59,19 @@ class Attention(nn.Module):
         self.attn = nn.Linear((enc_hid_dim * 2) + dec_hid_dim, dec_hid_dim)
         self.v = nn.Parameter(torch.rand(dec_hid_dim))
 
-    def forward(self, hidden, encoder_outputs, return_softmax=True):
-        # hidden = [batch size, dec hid dim]
-        # encoder_outputs = [src sent len, batch size, enc hid dim * 2]
-        batch_size = encoder_outputs.shape[1]
-        src_len = encoder_outputs.shape[0]
-        # repeat encoder hidden state src_len times
-        hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
+    def forward(self, hidden, encoder_outputs):
         encoder_outputs = encoder_outputs.permute(1, 0, 2)
-        # hidden = [batch size, src sent len, dec hid dim]
-        # encoder_outputs = [batch size, src sent len, enc hid dim * 2]
+        batch_size = encoder_outputs.shape[0]
+        src_len = encoder_outputs.shape[1]
+        hidden = hidden.permute(1, 0, 2).repeat(1, src_len, 1)
+
         energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))
-        # energy = [batch size, src sent len, dec hid dim]
         energy = energy.permute(0, 2, 1)
-        # energy = [batch size, dec hid dim, src sent len]
-        # v = [dec hid dim]
         v = self.v.repeat(batch_size, 1).unsqueeze(1)
-        # v = [batch size, 1, dec hid dim]
-        attention = torch.bmm(v, energy).squeeze(1)
-        # attention= [batch size, src len]
-        if return_softmax:
-            return F.softmax(attention, dim=1)
-        else:
-            return attention
+        attention = torch.softmax(torch.bmm(v, energy).squeeze(1), dim=1)
+
+        a = attention.unsqueeze(1)
+        weighted = torch.bmm(a, encoder_outputs)
+        weighted = weighted.squeeze(1)
+
+        return attention, weighted

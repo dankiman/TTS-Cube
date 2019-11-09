@@ -19,7 +19,8 @@ class Encodings:
         self.phoneme_list = []
         self.phoneme2int = {}
         self.char2int = {}
-        self.char2int['<UNK>'] = 0
+        self.char2int['<PAD>'] = 0
+        self.char2int['<UNK>'] = 1
 
     def update_encodings(self, dataset):
         char_count = {}
