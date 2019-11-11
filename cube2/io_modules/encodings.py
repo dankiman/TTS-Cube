@@ -24,6 +24,7 @@ class Encodings:
 
     def update_encodings(self, dataset):
         char_count = {}
+
         for entry in dataset.entries:
             for char in entry.word:
                 if char not in char_count:

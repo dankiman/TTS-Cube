@@ -29,8 +29,21 @@ def write_signal_to_file(signal, output_file, params):
     dio.write_wave(output_file, signal, params.target_sample_rate, dtype=signal.dtype)
 
 
+def _trim(mgc, att):
+    mx = att.shape[0]
+    count = 0
+    for ii in range(mgc.shape[0]):
+        if all(mgc[ii] < 0.001):
+            count += 1
+        if count == 9:
+            break
+    mx = min(mx, mgc.shape[0])
+    return mgc[:mx], att[:mx // 3]
+
+
 def synthesize(params):
     import torch
+    import time
     from cube2.io_modules.dataset import DatasetIO, Encodings
     from cube2.networks.text2mel import Text2Mel
     from cube2.networks.vocoder import CubeNet
@@ -47,16 +60,20 @@ def synthesize(params):
     cubenet.to(params.device)
     cubenet.eval()
     with torch.no_grad():
-        mgc, stop, att = text2mel(['This is a simple test'])
-    # from ipdb import set_trace
-    # set_trace()
+        start_text2mel = time.time()
+        mgc, stop, att = text2mel([open(params.txt_file).read().strip()])
+        stop_text2mel = time.time()
+
+    mgc, att = _trim(mgc[0].detach().cpu().numpy(), att[0].detach().cpu().numpy())
     with torch.no_grad():
-        mean, logvar, wav = cubenet(mgc)
+        start_cubenet = time.time()
+        wav = cubenet.synthesize(mgc, batch_size=64,
+                                 temperature=params.temperature)
+        stop_cubenet = time.time()
 
-    synth = torch.clamp(wav.view(-1) * 32767, -32767, 32767)
-    dio.write_wave(params.output, synth.detach().cpu().numpy(), 16000, dtype=np.int16)
+    synth = wav
+    dio.write_wave(params.output, synth, 16000, dtype=np.int16)
 
-    mgc = mgc[0].detach().cpu().numpy()
     bitmap = np.zeros((mgc.shape[1], mgc.shape[0], 3), dtype=np.uint8)
     for x in range(mgc.shape[0]):
         for y in range(mgc.shape[1]):
@@ -67,7 +84,6 @@ def synthesize(params):
     img = Image.fromarray(bitmap)
     img.save('{0}.mgc.png'.format(params.output))
 
-    att = att[0].detach().cpu().numpy()
     new_att = np.zeros((att.shape[1], att.shape[0], 3), dtype=np.uint8)
     for ii in range(att.shape[1]):
         for jj in range(att.shape[0]):
@@ -78,6 +94,10 @@ def synthesize(params):
 
     img = Image.fromarray(new_att)
     img.save('{0}.att.png'.format(params.output))
+    sys.stdout.write(
+        'Text2mel time: {0}\nCubenet time: {1}\nTotal audio:{2}\n'.format(stop_text2mel - start_text2mel,
+                                                                          stop_cubenet - start_cubenet,
+                                                                          synth.shape[0] / 16000))
 
 
 if __name__ == '__main__':
@@ -92,6 +112,7 @@ if __name__ == '__main__':
                       help='default: data/cube')
     parser.add_option('--output', dest='output', action='store', default='test.wav',
                       help='test.wav')
+    parser.add_option("--temperature", action="store", dest="temperature", type='float', default=0.35)
 
     (params, _) = parser.parse_args(sys.argv)
 

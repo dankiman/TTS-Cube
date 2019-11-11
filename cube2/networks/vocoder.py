@@ -105,7 +105,7 @@ class CubeNet(nn.Module):
         c = torch.tensor(mgc, dtype=torch.float32).view(-1, batch_size, mgc.shape[1]).to(self.output.weight.device.type)
         _, _, signal = self.forward(c, temperature=temperature, eps_min=-20)
 
-        return np.array(np.clip(signal.detach().cpu().view(-1).numpy(), -1.0, 1.0) * 32500, dtype=np.int16)
+        return np.array(np.clip(signal.detach().cpu().view(-1).numpy(), -1.0, 1.0) * 32767, dtype=np.int16)
 
     def forward(self, mgc, ext_conditioning=None, temperature=1.0, x=None, eps_min=-7):
         cond = self.upsample_input(mgc)

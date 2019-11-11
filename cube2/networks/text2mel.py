@@ -24,7 +24,7 @@ from cube2.networks.modules import Attention
 
 
 class Text2Mel(nn.Module):
-    def __init__(self, encodings, char_emb_size=100, encoder_size=256, encoder_layers=1, decoder_size=1024,
+    def __init__(self, encodings, char_emb_size=100, encoder_size=200, encoder_layers=1, decoder_size=500,
                  decoder_layers=2, mgc_size=80, pframes=3):
         super(Text2Mel, self).__init__()
         self.MGC_PROJ_SIZE = 100
@@ -33,7 +33,7 @@ class Text2Mel(nn.Module):
         self.pframes = pframes
         self.mgc_order = mgc_size
         self.char_emb = nn.Embedding(len(self.encodings.char2int), char_emb_size, padding_idx=0)
-        self.case_emb = nn.Embedding(4, 16)
+        self.case_emb = nn.Embedding(4, 16, padding_idx=0)
         self.char_conv = nn.Sequential(nn.Conv1d(char_emb_size + 16, char_emb_size, 5, padding=2), nn.ReLU(),
                                        nn.Dropout(0.33))
         self.mgc_proj = nn.Sequential(nn.Linear(mgc_size, self.MGC_PROJ_SIZE), nn.ReLU(), nn.Dropout(0.33))
@@ -75,6 +75,7 @@ class Text2Mel(nn.Module):
         lst_output = []
         lst_stop = []
         lst_att = []
+
         while True:
             att_vec, att = self.att(decoder_hidden[0][-1].unsqueeze(0), encoder_output)
             lst_att.append(att_vec.unsqueeze(1))
@@ -135,6 +136,8 @@ class Text2Mel(nn.Module):
         return torch.cat((x_char, x_case), dim=2)
 
     def _get_device(self):
+        if self.case_emb.weight.device.type == 'cpu':
+            return 'cpu'
         return '{0}:{1}'.format(self.case_emb.weight.device.type, str(self.case_emb.weight.device.index))
 
     def save(self, path):

@@ -9,10 +9,13 @@ class Encodings:
         self.char2int = {}
         self.context2int = {}
         self.speaker2int = {}
+        self.char2int['<PAD>'] = 0
+        self.char2int['<UNK>'] = 1
 
     def update(self, pi):
-        if pi.char not in self.char2int:
-            self.char2int[pi.char] = len(self.char2int)
+        char = pi.char.lower()
+        if char not in self.char2int:
+            self.char2int[char] = len(self.char2int)
         for feature in pi.context:
             if not feature.startswith("SPEAKER:"):
                 if feature not in self.context2int:
