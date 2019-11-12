@@ -16,7 +16,6 @@
 
 import torch
 import torch.nn as nn
-import torch.functional as F
 
 
 class UpsampleNet(nn.Module):
@@ -28,7 +27,8 @@ class UpsampleNet(nn.Module):
             convt = nn.utils.weight_norm(convt)
             nn.init.kaiming_normal_(convt.weight)
             self.upsample_conv.append(convt)
-            self.upsample_conv.append(nn.LeakyReLU(0.4))
+            self.upsample_conv.append(nn.ReLU())
+            # self.upsample_conv.append(nn.Dropout(0.5))
         self.output_transform = nn.Linear(input_size, output_size)
 
     def forward(self, x):
@@ -60,7 +60,7 @@ class Attention(nn.Module):
         self.v = nn.Parameter(torch.rand(dec_hid_dim))
 
     def forward(self, hidden, encoder_outputs):
-        encoder_outputs = encoder_outputs.permute(1, 0, 2)
+        # encoder_outputs = encoder_outputs.permute(1, 0, 2)
         batch_size = encoder_outputs.shape[0]
         src_len = encoder_outputs.shape[1]
         hidden = hidden.permute(1, 0, 2).repeat(1, src_len, 1)
@@ -75,3 +75,65 @@ class Attention(nn.Module):
         weighted = weighted.squeeze(1)
 
         return attention, weighted
+
+
+class Seq2Seq(nn.Module):
+    def __init__(self, num_input_tokens, num_output_tokens, embedding_size=100, encoder_size=100, encoder_layers=2,
+                 decoder_size=200, decoder_layers=2):
+        super(Seq2Seq, self).__init__()
+        self.emb_size = embedding_size
+        self.input_emb = nn.Embedding(num_input_tokens, embedding_size)
+        self.output_emb = nn.Embedding(num_output_tokens, embedding_size)
+        self.encoder = nn.LSTM(embedding_size, encoder_size, encoder_layers, dropout=0.33, bidirectional=True)
+        self.decoder = nn.LSTM(encoder_size * 2 + embedding_size, decoder_size, decoder_layers, dropout=0.33)
+        self.attention = Attention(encoder_size, decoder_size)
+        self.output = nn.Linear(decoder_size, num_output_tokens)
+
+    def forward(self, input, gs_output=None):
+        x, y = self._make_batches(input, gs_output)
+        x = self.input_emb(x)
+        encoder_output, encoder_hidden = self.encoder(x.permute(1, 0, 2))
+        encoder_output = encoder_output.permute(1, 0, 2)
+        count = 0
+
+        _, decoder_hidden = self.decoder(torch.zeros((1, x.shape[0], x.shape[2])), device=self._get_device())
+        last_output_emb = torch.zeros((x.shape[0], self.emb_size), device=self._get_device())
+        output_list = []
+        while True:
+            _, encoder_att = self.attention(decoder_hidden, encoder_output)
+            decoder_input = torch.cat([encoder_att, last_output_emb], dim=1)
+            decoder_output, decoder_hidden = self.decoder(decoder_input.unsqueeze(0), decoder_hidden)
+            output = self.output(decoder_output.squeeze(0))
+            output_list.append(output.unsqueeze(1))
+
+        return torch.cat(output_list, dim=1)
+
+    def _get_device(self):
+        if self.input_emb.weight.device.type == 'cpu':
+            return 'cpu'
+        return '{0}:{1}'.format(self.input_emb.weight.device.type, str(self.input_emb.weight.device.index))
+
+
+class PostNet(nn.Module):
+    def __init__(self, num_mels=80, kernel_size=5, filter_size=512):
+        super(PostNet, self).__init__()
+        self.network = nn.Sequential(
+            nn.Conv1d(num_mels, filter_size, kernel_size, padding=kernel_size // 2),
+            nn.Tanh(),
+            nn.Dropout(0.5),
+            nn.Conv1d(filter_size, filter_size, kernel_size, padding=kernel_size // 2),
+            nn.Tanh(),
+            nn.Dropout(0.5),
+            nn.Conv1d(filter_size, filter_size, kernel_size, padding=kernel_size // 2),
+            nn.Tanh(),
+            nn.Dropout(0.5),
+            nn.Conv1d(filter_size, filter_size, kernel_size, padding=kernel_size // 2),
+            nn.Tanh(),
+            nn.Dropout(0.5),
+            nn.Conv1d(filter_size, num_mels, kernel_size, padding=kernel_size // 2),
+        )
+
+    def forward(self, x):
+        x = x.permute(0, 2, 1)
+        y = self.network(x).permute(0, 2, 1)
+        return y

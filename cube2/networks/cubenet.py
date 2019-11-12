@@ -161,7 +161,7 @@ def _test_synth(params):
     devset = Dataset("data/processed/dev")
     devset = DataLoader(devset)
     cubenet = CubeNet()
-    cubenet.load('data/cube.best')
+    cubenet.load('data/cube.last')
     cubenet.to(params.device)
     cubenet.eval()
     import time

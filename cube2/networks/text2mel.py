@@ -20,7 +20,7 @@ import torch.nn as nn
 import numpy as np
 
 sys.path.append('')
-from cube2.networks.modules import Attention
+from cube2.networks.modules import Attention, PostNet
 
 
 class Text2Mel(nn.Module):
@@ -43,11 +43,12 @@ class Text2Mel(nn.Module):
                                dropout=0 if decoder_layers == 1 else 0.33,
                                bidirectional=False)
 
-        self.dec2hid = nn.Sequential(nn.Linear(decoder_size, 500), nn.LeakyReLU(0.4), nn.Dropout(0.33))
+        self.dec2hid = nn.Sequential(nn.Linear(decoder_size, 500), nn.ReLU(), nn.Dropout(0.33))
         self.dropout = nn.Dropout(0.33)
         self.output_mgc = nn.Sequential(nn.Linear(500, mgc_size * pframes), nn.Sigmoid())
         self.output_stop = nn.Sequential(nn.Linear(500, self.pframes), nn.Sigmoid())
         self.att = Attention(encoder_size, decoder_size)
+        self.postnet = PostNet(mgc_size)
 
     def forward(self, input, gs_mgc=None):
         if gs_mgc is not None:
@@ -67,9 +68,10 @@ class Text2Mel(nn.Module):
         x = self._make_input(input)
         lstm_input = self.char_conv(x.permute(0, 2, 1)).permute(0, 2, 1)
         encoder_output, encoder_hidden = self.encoder(lstm_input.permute(1, 0, 2))
+        encoder_output = encoder_output.permute(1, 0, 2)
 
         _, decoder_hidden = self.decoder(
-            torch.zeros((1, encoder_output.shape[1], encoder_output.shape[2] + self.MGC_PROJ_SIZE),
+            torch.zeros((1, encoder_output.shape[0], encoder_output.shape[2] + self.MGC_PROJ_SIZE),
                         device=self._get_device()))
         last_mgc = torch.zeros((lstm_input.shape[0], self.mgc_order), device=self._get_device())
         lst_output = []
@@ -79,7 +81,11 @@ class Text2Mel(nn.Module):
         while True:
             att_vec, att = self.att(decoder_hidden[0][-1].unsqueeze(0), encoder_output)
             lst_att.append(att_vec.unsqueeze(1))
-            decoder_input = torch.cat((att, self.mgc_proj(last_mgc)), dim=1)
+            m_proj = self.mgc_proj(last_mgc)
+            # if gs_mgc is None:
+            #    m_proj = torch.dropout(m_proj, 0.33, True)
+
+            decoder_input = torch.cat((att, m_proj), dim=1)
             decoder_output, decoder_hidden = self.decoder(decoder_input.unsqueeze(0), hx=decoder_hidden)
             decoder_output = decoder_output.permute(1, 0, 2)
             decoder_output = self.dec2hid(decoder_output)
@@ -104,7 +110,7 @@ class Text2Mel(nn.Module):
         mgc = torch.cat(lst_output, dim=1)  # .view(len(input), -1, self.mgc_order)
         stop = torch.cat(lst_stop, dim=1)  # .view(len(input), -1)
         att = torch.cat(lst_att, dim=1)
-        return mgc, stop, att
+        return mgc + self.postnet(mgc), mgc, stop, att
 
     def _make_input(self, input):
         max_len = max([len(seq) for seq in input])
@@ -273,15 +279,16 @@ def _start_train(params):
             sys.stderr.flush()
             global_step += 1
             x, mgc = trainset.get_batch(batch_size=params.batch_size)
-            pred_mgc, pred_stop, pred_att = text2mel(x, gs_mgc=mgc)
+            pred_mgc, pred_pre, pred_stop, pred_att = text2mel(x, gs_mgc=mgc)
             target_mgc, target_stop = _make_batch(mgc, device=params.device)
 
             num_tokens = [len(seq) for seq in x]
             num_mgcs = [m.shape[0] // 3 for m in mgc]
-            target_att = _compute_guided_attention(num_tokens, num_mgcs, device=params.device)
+            # target_att = _compute_guided_attention(num_tokens, num_mgcs, device=params.device)
             loss_bce = abs_loss(pred_mgc.view(-1), target_mgc.view(-1)) + \
-                       bce_loss(pred_stop.view(-1), target_stop.view(-1)) + \
-                       (pred_att * target_att).mean()
+                       abs_loss(pred_pre.view(-1), target_mgc.view(-1)) + \
+                       bce_loss(pred_stop.view(-1), target_stop.view(-1))  # + \
+            #            (pred_att * target_att).mean()
             loss = loss_bce
             optimizer_gen.zero_grad()
             loss.backward()

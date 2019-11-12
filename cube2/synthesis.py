@@ -36,6 +36,7 @@ def _trim(mgc, att):
         if all(mgc[ii] < 0.001):
             count += 1
         if count == 9:
+            mx -= 9
             break
     mx = min(mx, mgc.shape[0])
     return mgc[:mx], att[:mx // 3]
@@ -61,7 +62,7 @@ def synthesize(params):
     cubenet.eval()
     with torch.no_grad():
         start_text2mel = time.time()
-        mgc, stop, att = text2mel([open(params.txt_file).read().strip()])
+        mgc, _, stop, att = text2mel([open(params.txt_file).read().strip()])
         stop_text2mel = time.time()
 
     mgc, att = _trim(mgc[0].detach().cpu().numpy(), att[0].detach().cpu().numpy())
