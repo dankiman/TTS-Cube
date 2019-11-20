@@ -24,29 +24,35 @@ from cube2.networks.modules import Attention, PostNet
 
 
 class Text2Mel(nn.Module):
-    def __init__(self, encodings, char_emb_size=100, encoder_size=200, encoder_layers=1, decoder_size=500,
+    def __init__(self, encodings, char_emb_size=100, encoder_size=256, encoder_layers=1, decoder_size=1024,
                  decoder_layers=2, mgc_size=80, pframes=3):
         super(Text2Mel, self).__init__()
-        self.MGC_PROJ_SIZE = 100
+        self.MGC_PROJ_SIZE = 256
 
         self.encodings = encodings
         self.pframes = pframes
         self.mgc_order = mgc_size
         self.char_emb = nn.Embedding(len(self.encodings.char2int), char_emb_size, padding_idx=0)
         self.case_emb = nn.Embedding(4, 16, padding_idx=0)
-        self.char_conv = nn.Sequential(nn.Conv1d(char_emb_size + 16, char_emb_size, 5, padding=2), nn.ReLU(),
-                                       nn.Dropout(0.33))
-        self.mgc_proj = nn.Sequential(nn.Linear(mgc_size, self.MGC_PROJ_SIZE), nn.ReLU(), nn.Dropout(0.33))
-        self.encoder = nn.LSTM(char_emb_size, encoder_size, encoder_layers, bias=True,
+        self.char_conv = nn.Sequential(nn.Conv1d(char_emb_size + 16, 512, 5, padding=2), nn.ReLU(),
+                                       nn.Dropout(0.5),
+                                       nn.Conv1d(512, 512, 5, padding=2), nn.ReLU(),
+                                       nn.Dropout(0.5),
+                                       nn.Conv1d(512, 512, 5, padding=2), nn.ReLU(),
+                                       nn.Dropout(0.5)
+                                       )
+        self.mgc_proj = nn.Sequential(nn.Linear(mgc_size, self.MGC_PROJ_SIZE), nn.ReLU(), nn.Dropout(0.5),
+                                      nn.Linear(self.MGC_PROJ_SIZE, self.MGC_PROJ_SIZE), nn.ReLU(), nn.Dropout(0.5))
+        self.encoder = nn.LSTM(512, encoder_size, encoder_layers, bias=True,
                                dropout=0 if encoder_layers == 1 else 0.33, bidirectional=True)
         self.decoder = nn.LSTM(encoder_size * 2 + self.MGC_PROJ_SIZE, decoder_size, decoder_layers, bias=True,
                                dropout=0 if decoder_layers == 1 else 0.33,
                                bidirectional=False)
 
-        self.dec2hid = nn.Sequential(nn.Linear(decoder_size, 500), nn.ReLU(), nn.Dropout(0.33))
+        self.dec2hid = nn.Sequential(nn.Linear(decoder_size, 500), nn.ReLU(), nn.Dropout(0.5))
         self.dropout = nn.Dropout(0.33)
-        self.output_mgc = nn.Sequential(nn.Linear(500, mgc_size * pframes), nn.Sigmoid())
-        self.output_stop = nn.Sequential(nn.Linear(500, self.pframes), nn.Sigmoid())
+        self.output_mgc = nn.Sequential(nn.Linear(500, mgc_size * pframes))
+        self.output_stop = nn.Sequential(nn.Linear(mgc_size * pframes, self.pframes), nn.Sigmoid())
         self.att = Attention(encoder_size, decoder_size)
         self.postnet = PostNet(mgc_size)
 
@@ -82,15 +88,15 @@ class Text2Mel(nn.Module):
             att_vec, att = self.att(decoder_hidden[0][-1].unsqueeze(0), encoder_output)
             lst_att.append(att_vec.unsqueeze(1))
             m_proj = self.mgc_proj(last_mgc)
-            # if gs_mgc is None:
-            #    m_proj = torch.dropout(m_proj, 0.33, True)
+            #if gs_mgc is None:
+            #    m_proj = torch.dropout(m_proj, 0.5, True)
 
             decoder_input = torch.cat((att, m_proj), dim=1)
             decoder_output, decoder_hidden = self.decoder(decoder_input.unsqueeze(0), hx=decoder_hidden)
             decoder_output = decoder_output.permute(1, 0, 2)
             decoder_output = self.dec2hid(decoder_output)
             out_mgc = self.output_mgc(decoder_output)
-            out_stop = self.output_stop(decoder_output)
+            out_stop = self.output_stop(out_mgc.detach())
             for iFrame in range(self.pframes):
                 lst_output.append(out_mgc[:, :, iFrame * self.mgc_order:iFrame * self.mgc_order + self.mgc_order])
                 lst_stop.append(out_stop[:, :, iFrame])
@@ -284,11 +290,13 @@ def _start_train(params):
 
             num_tokens = [len(seq) for seq in x]
             num_mgcs = [m.shape[0] // 3 for m in mgc]
-            # target_att = _compute_guided_attention(num_tokens, num_mgcs, device=params.device)
+            if not params.disable_guided_attention:
+                target_att = _compute_guided_attention(num_tokens, num_mgcs, device=params.device)
             loss_bce = abs_loss(pred_mgc.view(-1), target_mgc.view(-1)) + \
                        abs_loss(pred_pre.view(-1), target_mgc.view(-1)) + \
                        bce_loss(pred_stop.view(-1), target_stop.view(-1))  # + \
-            #            (pred_att * target_att).mean()
+            if not params.disable_guided_attention:
+                loss_bce += (pred_att * target_att).mean()
             loss = loss_bce
             optimizer_gen.zero_grad()
             loss.backward()
@@ -368,6 +376,7 @@ if __name__ == '__main__':
     parser.add_option("--temperature", action="store", dest="temperature", type='float', default=1.0)
     parser.add_option("--device", action="store", dest="device", default='cuda:0')
     parser.add_option("--lr", action="store", dest="lr", default=1e-3, type=float)
+    parser.add_option("--disable-guided-attention", action="store_true", dest="disable_guided_attention")
 
     (params, _) = parser.parse_args(sys.argv)
     if params.test:

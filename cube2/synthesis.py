@@ -101,6 +101,51 @@ def synthesize(params):
                                                                           synth.shape[0] / 16000))
 
 
+def quick_test(params):
+    import torch
+    import time
+    from cube2.io_modules.dataset import DatasetIO, Encodings
+    from cube2.networks.text2mel import Text2Mel
+    from cube2.networks.vocoder import CubeNet
+
+    dio = DatasetIO()
+    encodings = Encodings()
+    encodings.load('{0}.encodings'.format(params.text2mel))
+    text2mel = Text2Mel(encodings)
+    text2mel.load('{0}.last'.format(params.text2mel))
+    text2mel.to(params.device)
+    text2mel.eval()
+    cubenet = CubeNet()
+    cubenet.load('{0}'.format(params.cubenet))
+    cubenet.to(params.device)
+    cubenet.eval()
+    with torch.no_grad():
+        start_text2mel = time.time()
+        mgc, _, stop, att = text2mel([open(params.txt_file).read().strip()])
+        stop_text2mel = time.time()
+
+    import PIL.Image
+    image = PIL.Image.open(r'../test.en.wav.png')
+    image = np.array(image)
+    mgc = np.zeros((image.shape[1], image.shape[0]))
+
+    for ii in range(image.shape[0]):
+        for jj in range(image.shape[1]):
+            mgc[jj, mgc.shape[1] - ii - 1] = image[ii, jj, 0] / 255
+
+    # mgc, att = _trim(mgc[0].detach().cpu().numpy(), att[0].detach().cpu().numpy())
+    from ipdb import set_trace
+    set_trace()
+    with torch.no_grad():
+        start_cubenet = time.time()
+        wav = cubenet.synthesize(mgc, batch_size=64,
+                                 temperature=params.temperature)
+        stop_cubenet = time.time()
+
+    synth = wav
+    dio.write_wave(params.output, synth, 16000, dtype=np.int16)
+
+
 if __name__ == '__main__':
     parser = optparse.OptionParser()
     parser.add_option('--input-file', action='store', dest='txt_file',
@@ -118,3 +163,5 @@ if __name__ == '__main__':
     (params, _) = parser.parse_args(sys.argv)
 
     synthesize(params)
+
+    # quick_test(params)
