@@ -79,32 +79,59 @@ class Attention(nn.Module):
 
 class Seq2Seq(nn.Module):
     def __init__(self, num_input_tokens, num_output_tokens, embedding_size=100, encoder_size=100, encoder_layers=2,
-                 decoder_size=200, decoder_layers=2):
+                 decoder_size=200, decoder_layers=2, pad_index=0, unk_index=1, stop_index=2):
         super(Seq2Seq, self).__init__()
         self.emb_size = embedding_size
-        self.input_emb = nn.Embedding(num_input_tokens, embedding_size)
-        self.output_emb = nn.Embedding(num_output_tokens, embedding_size)
+        self.input_emb = nn.Embedding(num_input_tokens, embedding_size, padding_idx=pad_index)
+        self.output_emb = nn.Embedding(num_output_tokens, embedding_size, padding_idx=pad_index)
         self.encoder = nn.LSTM(embedding_size, encoder_size, encoder_layers, dropout=0.33, bidirectional=True)
         self.decoder = nn.LSTM(encoder_size * 2 + embedding_size, decoder_size, decoder_layers, dropout=0.33)
         self.attention = Attention(encoder_size, decoder_size)
         self.output = nn.Linear(decoder_size, num_output_tokens)
+        self._PAD = pad_index
+        self._UNK = unk_index
+        self._EOS = stop_index
+        self._dec_input_size = encoder_size * 2 + embedding_size
 
-    def forward(self, input, gs_output=None):
-        x, y = self._make_batches(input, gs_output)
+    def forward(self, x, gs_output=None):
+        # x, y = self._make_batches(input, gs_output)
         x = self.input_emb(x)
         encoder_output, encoder_hidden = self.encoder(x.permute(1, 0, 2))
         encoder_output = encoder_output.permute(1, 0, 2)
         count = 0
+        if gs_output is not None:
+            batch_output_emb = self.output_emb(gs_output)
 
-        _, decoder_hidden = self.decoder(torch.zeros((1, x.shape[0], x.shape[2])), device=self._get_device())
+        _, decoder_hidden = self.decoder(torch.zeros((1, x.shape[0], self._dec_input_size), device=self._get_device()))
         last_output_emb = torch.zeros((x.shape[0], self.emb_size), device=self._get_device())
         output_list = []
+        index = 0
+        reached_end = [False for _ in range(x.shape[0])]
         while True:
-            _, encoder_att = self.attention(decoder_hidden, encoder_output)
+            _, encoder_att = self.attention(decoder_hidden[-1][-1].unsqueeze(0), encoder_output)
             decoder_input = torch.cat([encoder_att, last_output_emb], dim=1)
             decoder_output, decoder_hidden = self.decoder(decoder_input.unsqueeze(0), decoder_hidden)
             output = self.output(decoder_output.squeeze(0))
             output_list.append(output.unsqueeze(1))
+
+            if gs_output is not None:
+                last_output_emb = batch_output_emb[:, index, :]
+                index += 1
+                if index == gs_output.shape[1]:
+                    break
+            else:
+                outp = torch.argmax(output, dim=1)
+                last_output_emb = self.output_emb(outp)
+                for ii in range(outp.shape[0]):
+                    if outp[ii] == self._EOS:
+                        reached_end[ii] = True
+                import numpy as np
+                if np.all(reached_end):
+                    break
+                index += 1
+
+                if index > x.shape[1] * 10:
+                    break
 
         return torch.cat(output_list, dim=1)
 
@@ -112,6 +139,12 @@ class Seq2Seq(nn.Module):
         if self.input_emb.weight.device.type == 'cpu':
             return 'cpu'
         return '{0}:{1}'.format(self.input_emb.weight.device.type, str(self.input_emb.weight.device.index))
+
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+
+    def load(self, path):
+        self.load_state_dict(torch.load(path, map_location='cpu'))
 
 
 class PostNet(nn.Module):
