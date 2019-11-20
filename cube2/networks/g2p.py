@@ -29,6 +29,7 @@ class G2P:
         self.label2int = {'<PAD>': 0, '<UNK>': 1, '<EOS>': 2}
         self.label_list = ['<PAD>', '<UNK>', '<EOS>']
         self.criterion = torch.nn.CrossEntropyLoss(ignore_index=0)
+        self.simple_tokenizer = SimpleTokenizer()
 
     def process_utterance(self, utterance):
         pass
@@ -152,6 +153,23 @@ class G2P:
         return '{0}:{1}'.format(self.seq2seq.output_emb.weight.device.type,
                                 str(self.seq2seq.output_emb.weight.device.index))
 
+    def transcribe_utterance(self, utterance):
+        tokens = self.simple_tokenizer(utterance)
+        words = []
+        for token in tokens:
+            if token.is_word:
+                words.append(token.word.lower())
+
+        transcriptions = self.transcribe(words)
+        i_trans = 0
+        for token in tokens:
+            if token.is_word:
+                token.transcription = transcriptions[i_trans]
+                i_trans += 1
+            else:
+                token.transcription = [c for c in token.word]
+        return tokens
+
     def evaluate(self, dataset):
         err = 0
         total = len(dataset.examples)
@@ -172,6 +190,34 @@ class G2P:
 
     def eval(self):
         self.seq2seq.eval()
+
+
+class Token:
+    def __init__(self, word='', transcription=[], is_word=False):
+        self.word = word
+        self.transcription = transcription
+        self.is_word = is_word
+
+    def __repr__(self):
+        return '{0}'.format(self.transcription)
+
+
+class SimpleTokenizer:
+    def __init__(self):
+        pass
+
+    def __call__(self, utterance):
+        tokens = []
+        cb = ''
+        for char in utterance:
+            if char.isalpha():
+                cb += char
+            else:
+                if cb != '':
+                    tokens.append(Token(word=cb, is_word=True))
+                    cb = ''
+                tokens.append(Token(word=char, is_word=False))
+        return tokens
 
 
 class G2PDataset:
@@ -247,6 +293,7 @@ def _start_train(params):
         acc = g2p.evaluate(dev)
         sys.stdout.write('\tDevset accuracy: {0}\n'.format(acc))
         if acc > best_acc:
+            best_acc = acc
             sys.stdout.write('\tStoring {0}.best\n'.format(params.output_path))
             g2p.seq2seq.save('{0}.best'.format(params.output_path))
 
