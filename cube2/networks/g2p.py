@@ -33,7 +33,10 @@ class G2P:
     def process_utterance(self, utterance):
         pass
 
-    def load(self, path):
+    def to(self, device):
+        self.seq2seq.to(device)
+
+    def load(self, path, load_last=False):
         import json
         f = open('{0}.encodings'.format(path), 'r')
         json_obj = json.load(f)
@@ -42,7 +45,10 @@ class G2P:
         self.label_list = json_obj['label_list']
         f.close()
         self.initialize_network()
-        self.seq2seq.load('{0}.last'.format(path))
+        if load_last:
+            self.seq2seq.load('{0}.last'.format(path))
+        else:
+            self.seq2seq.load('{0}.best'.format(path))
 
     def save(self, path):
         f = open('{0}.encodings'.format(path), 'w')
@@ -201,9 +207,11 @@ def _start_train(params):
         g2p.update_encodings(train)
         g2p.initialize_network()
         g2p.save(params.output_path)
+        g2p.to(params.device)
         best_acc = 0
     else:
-        g2p.load(params.model_path)
+        g2p.load(params.model_path, load_last=True)
+        g2p.to(params.device)
         g2p.seq2seq.eval()
         best_acc = g2p.evaluate(dev)
         sys.stdout.write('Setting baseline accuracy to {0:.4f}\n'.format(best_acc))
@@ -251,6 +259,7 @@ def _eval(params):
     dev = G2PDataset(params.test_file)
     g2p = G2P()
     g2p.load(params.model_path)
+    g2p.to(params.device)
     g2p.seq2seq.eval()
     acc = g2p.evaluate(dev)
     sys.stdout.write('Word accuracy rate is {0:.2f}%\n'.format(acc * 100))
