@@ -296,6 +296,7 @@ def _start_train(params):
             best_acc = acc
             sys.stdout.write('\tStoring {0}.best\n'.format(params.output_path))
             g2p.seq2seq.save('{0}.best'.format(params.output_path))
+            patience_left = params.patience
 
         sys.stdout.write('\tStoring {0}.last\n'.format(params.output_path))
         g2p.seq2seq.save('{0}.last'.format(params.output_path))
