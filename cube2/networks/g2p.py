@@ -30,9 +30,7 @@ class G2P:
         self.label_list = ['<PAD>', '<UNK>', '<EOS>']
         self.criterion = torch.nn.CrossEntropyLoss(ignore_index=0)
         self.simple_tokenizer = SimpleTokenizer()
-
-    def process_utterance(self, utterance):
-        pass
+        self.lookup = {}
 
     def to(self, device):
         self.seq2seq.to(device)
@@ -145,7 +143,17 @@ class G2P:
                 if index != self.label2int['<PAD>'] and index != self.label2int['<UNK>']:
                     tr.append(self.label_list[index])
             transcriptions.append(tr)
+
         return transcriptions
+
+    def load_lexicon(self, path):
+        lines = open(path).readlines()
+        for line in lines:
+            line = line.strip()
+            parts = line.split('\t')
+            word = parts[0].lower()
+            transcription = parts[1].split(' ')
+            self.lookup[word] = transcription
 
     def _get_device(self):
         if self.seq2seq.output_emb.weight.device.type == 'cpu':
@@ -166,6 +174,8 @@ class G2P:
             if token.is_word:
                 token.transcription = transcriptions[i_trans]
                 i_trans += 1
+                if token.word.lower() in self.lookup:
+                    token.transcription = self.lookup[token.word.lower()]
             else:
                 token.transcription = [c for c in token.word]
         return tokens

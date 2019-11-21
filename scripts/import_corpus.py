@@ -14,18 +14,16 @@
 # limitations under the License.
 #
 
-import dynet_config
 import optparse
 import sys
 import numpy as np
+
 sys.path.append('')
 
 if __name__ == '__main__':
     parser = optparse.OptionParser()
     parser.add_option('--cleanup', action='store_true', dest='cleanup',
                       help='Cleanup temporary training files and start from fresh')
-    parser.add_option("--batch-size", action='store', dest='batch_size', default='1000', type='int',
-                      help='number of samples in a single batch (default=1000)')
     parser.add_option('--train-folder', action='store', dest='train_folder',
                       help='Location of the training files')
     parser.add_option('--dev-folder', action='store', dest='dev_folder',
@@ -35,11 +33,13 @@ if __name__ == '__main__':
     parser.add_option('--mgc-order', action='store', dest='mgc_order', type='int',
                       help='Order of MGC parameters (default=80)', default=80)
     parser.add_option('--speaker', action='store', dest='speaker', help='Import data under given speaker')
+    parser.add_option('--device', action='store', dest='device', help='Device to use for g2p', default='cpu')
     parser.add_option('--prefix', action='store', dest='prefix', help='Use this prefix when importing files')
     parser.add_option('--g2p-model', dest='g2p', action='store',
                       help='Use this G2P model for processing')
 
     (params, _) = parser.parse_args(sys.argv)
+
 
     def array2file(a, filename):
         np.save(filename, a)
@@ -63,14 +63,14 @@ if __name__ == '__main__':
                 bitmap[mgc.shape[1] - y - 1, x] = [color, color, color]
         from PIL import Image
 
-        img = Image.fromarray(bitmap)#smp.toimage(bitmap)
+        img = Image.fromarray(bitmap)  # smp.toimage(bitmap)
         img.save(output_file)
 
 
     def create_lab_file(txt_file, lab_file, speaker_name=None, g2p=None):
         fin = open(txt_file, 'r')
-        fout = open(lab_file, 'w')
         line = fin.readline().strip().replace('\t', ' ')
+        json_obj = {}
         while True:
             nl = line.replace('  ', ' ')
             if nl == line:
@@ -78,60 +78,28 @@ if __name__ == '__main__':
             line = nl
 
         if speaker_name is not None:
-            speaker = 'SPEAKER:' + speaker_name
+            json_obj['speaker'] = speaker_name  # speaker = 'SPEAKER:' + speaker_name
         elif len(txt_file.replace('\\', '/').split('/')[-1].split('_')) != 1:
-            speaker = 'SPEAKER:' + txt_file.replace('\\', '/').split('_')[0].split('/')[-1]
+            json_obj['speaker'] = txt_file.replace('\\', '/').split('_')[0].split('/')[-1]
         else:
-            speaker = 'SPEAKER:none'
+            json_obj['speaker'] = 'none'
 
-        fout.write('START\n')
-
+        json_obj['text'] = line
         if g2p is not None:
-            w = ''
-            for char in line:
-                l_char = char.lower()
-                if l_char == l_char.upper():  # symbol
-                    # append word, then symbol
-                    if w.strip() != '':
-                        transcription = g2p.transcribe(w)
-                        first = True
-                        for phon in transcription:
-                            if first and w[0].upper() == w[0]:
-                                style = 'CASE:upper'
-                                first = False
-                            else:
-                                style = 'CASE:lower'
-
-                            fout.write(phon + '\t' + speaker + '\t' + style + '\n')
-                    w = ''
-                    fout.write(l_char + '\t' + speaker + '\tCASE:symb\n')
-                else:
-                    w += l_char
-            if w.strip() != '':
-                transcription = g2p.transcribe(w)
-                first = True
-                for phon in transcription:
-                    if first and w[0].upper() == w[0]:
-                        style = 'CASE:upper'
-                        first = False
-                    else:
-                        style = 'CASE:lower'
-
-                    fout.write(phon + '\t' + speaker + '\t' + style + '\n')
-                w = ''
+            trans = ['<START>']
+            utt = g2p.transcribe_utterance(line)
+            for word in utt:
+                for ph in word.transcription:
+                    trans.append(ph)
+            trans.append('<STOP>')
+            json_obj['transcription'] = trans
         else:
-            for char in line:
-                l_char = char.lower()
-                style = 'CASE:lower'
-                if l_char == l_char.upper():
-                    style = 'CASE:symb'
-                elif l_char != char:
-                    style = 'CASE:upper'
-                fout.write(l_char + '\t' + speaker + '\t' + style + '\n')
-
-        fout.write('STOP\n')
+            json_obj['transcription'] = ['<START>'] + [c.lower() for c in line] + ['<STOP>']
 
         fin.close()
+        fout = open(lab_file, 'w')
+        import json
+        json.dump(json_obj, fout)
         fout.close()
         return ""
 
@@ -147,12 +115,11 @@ if __name__ == '__main__':
             dev_files_tmp = []
 
         if params.g2p is not None:
-            from cube2.models.g2p import G2P
-            from cube2.io_modules.encodings import Encodings
-            g2p_encodings = Encodings()
-            g2p_encodings.load(params.g2p + '.encodings')
-            g2p = G2P(g2p_encodings)
-            g2p.load(params.g2p + '-bestAcc.network')
+            from cube2.networks.g2p import G2P
+            g2p = G2P()
+            g2p.load(params.g2p)
+            g2p.to(params.device)
+            g2p.eval()
             if exists(params.g2p + '.lexicon'):
                 g2p.load_lexicon(params.g2p + '.lexicon')
         else:
@@ -275,5 +242,6 @@ if __name__ == '__main__':
                 array2file(mgc, join('data/processed/dev', tgt_mgc_name))
 
         sys.stdout.write('\n')
+
 
     phase_1_prepare_corpus(params)
