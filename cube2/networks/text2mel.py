@@ -85,10 +85,10 @@ class Text2Mel(nn.Module):
         lst_att = []
 
         while True:
-            att_vec, att = self.att(decoder_hidden[0][-1].unsqueeze(0), encoder_output)
+            att_vec, att = self.att(decoder_hidden[-1][-1].unsqueeze(0), encoder_output)
             lst_att.append(att_vec.unsqueeze(1))
             m_proj = self.mgc_proj(last_mgc)
-            #if gs_mgc is None:
+            # if gs_mgc is None:
             #    m_proj = torch.dropout(m_proj, 0.5, True)
 
             decoder_input = torch.cat((att, m_proj), dim=1)
@@ -275,7 +275,8 @@ def _start_train(params):
     global_step = 0
     best_gloss = _eval(text2mel, devset, params)
     bce_loss = torch.nn.BCELoss()
-    abs_loss = torch.nn.L1Loss()
+    abs_loss = torch.nn.L1Loss(reduction='mean')
+    mse_loss = torch.nn.MSELoss(reduction='mean')
     while patience_left > 0:
         text2mel.train()
         total_loss_bce = 0.0
@@ -292,8 +293,8 @@ def _start_train(params):
             num_mgcs = [m.shape[0] // 3 for m in mgc]
             if not params.disable_guided_attention:
                 target_att = _compute_guided_attention(num_tokens, num_mgcs, device=params.device)
-            loss_bce = abs_loss(pred_mgc.view(-1), target_mgc.view(-1)) + \
-                       abs_loss(pred_pre.view(-1), target_mgc.view(-1)) + \
+            loss_bce = abs_loss(pred_mgc.view(-1), target_mgc.view(-1)) * 80 + \
+                       abs_loss(pred_pre.view(-1), target_mgc.view(-1)) * 80 + \
                        bce_loss(pred_stop.view(-1), target_stop.view(-1))  # + \
             if not params.disable_guided_attention:
                 loss_bce += (pred_att * target_att).mean()
