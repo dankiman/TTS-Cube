@@ -18,9 +18,11 @@ import torch
 import sys
 import torch.nn as nn
 import numpy as np
+import json
 
 sys.path.append('')
 from cube2.networks.modules import Attention, PostNet
+from os.path import exists
 
 
 class Text2Mel(nn.Module):
@@ -176,9 +178,15 @@ class DataLoader:
         mgc_file = file + ".mgc.npy"
         mgc = np.load(mgc_file)
         txt_file = file + ".txt"
-        txt = open(txt_file).read().strip()
+        lab_file = file + ".lab"
+        if exists(lab_file):
+            json_obj = json.load(open(lab_file))
+            trans = json_obj['transcription']
+        else:
+            txt = open(txt_file).read().strip()
+            trans = [c for c in txt]
         self._file_index += 1
-        return txt, mgc
+        return trans, mgc
 
     def get_batch(self, batch_size, mini_batch_size=16, device='cuda:0'):
         batch_mgc = []
@@ -200,8 +208,14 @@ def _update_encodings(encodings, dataset):
     import tqdm
     for train_file in tqdm.tqdm(dataset._dataset.files):
         txt_file = train_file + ".txt"
-        txt = open(txt_file).read().strip()
-        for char in txt:
+        lab_file = train_file + ".lab"
+        if exists(lab_file):
+            json_obj = json.load(open(lab_file))
+            trans = json_obj['transcription']
+        else:
+            txt = open(txt_file).read().strip()
+            trans = [c for c in trans]
+        for char in trans:
             from cube2.io_modules.dataset import PhoneInfo
             pi = PhoneInfo(char, [], -1, -1)
             encodings.update(pi)

@@ -48,6 +48,15 @@ def synthesize(params):
     from cube2.io_modules.dataset import DatasetIO, Encodings
     from cube2.networks.text2mel import Text2Mel
     from cube2.networks.vocoder import CubeNet
+    from os.path import exists
+    if params.g2p is not None:
+        from cube2.networks.g2p import G2P
+        g2p = G2P()
+        g2p.load(params.g2p)
+        g2p.to(params.device)
+        g2p.eval()
+        if exists(params.g2p + '.lexicon'):
+            g2p.load_lexicon(params.g2p + '.lexicon')
 
     dio = DatasetIO()
     encodings = Encodings()
@@ -61,8 +70,18 @@ def synthesize(params):
     cubenet.to(params.device)
     cubenet.eval()
     with torch.no_grad():
+        if params.g2p:
+            text = open(params.txt_file).read().strip()
+            tokens = g2p.transcribe_utterance(text)
+            trans = []
+            for token in tokens:
+                for ph in token.transcription:
+                    trans.append(ph)
+            text = ['<START>'] + trans + ['<STOP>']
+        else:
+            text = [c for c in open(params.txt_file).read().strip()]
         start_text2mel = time.time()
-        mgc, _, stop, att = text2mel([open(params.txt_file).read().strip()])
+        mgc, _, stop, att = text2mel([text])
         stop_text2mel = time.time()
 
     mgc, att = _trim(mgc[0].detach().cpu().numpy(), att[0].detach().cpu().numpy())
@@ -158,6 +177,7 @@ if __name__ == '__main__':
                       help='default: data/cube')
     parser.add_option('--output', dest='output', action='store', default='test.wav',
                       help='test.wav')
+    parser.add_option('--g2p', dest='g2p', action='store')
     parser.add_option("--temperature", action="store", dest="temperature", type='float', default=0.35)
 
     (params, _) = parser.parse_args(sys.argv)

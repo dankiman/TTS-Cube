@@ -76,6 +76,7 @@ if __name__ == '__main__':
             if nl == line:
                 break
             line = nl
+        line = line.strip()
 
         if speaker_name is not None:
             json_obj['speaker'] = speaker_name  # speaker = 'SPEAKER:' + speaker_name
