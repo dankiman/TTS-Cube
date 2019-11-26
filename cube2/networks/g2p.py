@@ -227,6 +227,8 @@ class SimpleTokenizer:
                     tokens.append(Token(word=cb, is_word=True))
                     cb = ''
                 tokens.append(Token(word=char, is_word=False))
+        if cb!='':
+            tokens.append(Token(word=cb, is_word=True))
         return tokens
 
 
