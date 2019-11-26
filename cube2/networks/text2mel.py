@@ -46,13 +46,13 @@ class Text2Mel(nn.Module):
         self.mgc_proj = nn.Sequential(nn.Linear(mgc_size, self.MGC_PROJ_SIZE), nn.ReLU(), nn.Dropout(0.5),
                                       nn.Linear(self.MGC_PROJ_SIZE, self.MGC_PROJ_SIZE), nn.ReLU(), nn.Dropout(0.5))
         self.encoder = nn.LSTM(512, encoder_size, encoder_layers, bias=True,
-                               dropout=0 if encoder_layers == 1 else 0.33, bidirectional=True)
+                               dropout=0 if encoder_layers == 1 else 0, bidirectional=True)
         self.decoder = nn.LSTM(encoder_size * 2 + self.MGC_PROJ_SIZE, decoder_size, decoder_layers, bias=True,
-                               dropout=0 if decoder_layers == 1 else 0.33,
+                               dropout=0 if decoder_layers == 1 else 0,
                                bidirectional=False)
 
         self.dec2hid = nn.Sequential(nn.Linear(decoder_size, 500), nn.ReLU(), nn.Dropout(0.5))
-        self.dropout = nn.Dropout(0.33)
+        self.dropout = nn.Dropout(0.1)
         self.output_mgc = nn.Sequential(nn.Linear(500, mgc_size * pframes))
         self.output_stop = nn.Sequential(nn.Linear(mgc_size * pframes, self.pframes), nn.Sigmoid())
         self.att = Attention(encoder_size, decoder_size)
