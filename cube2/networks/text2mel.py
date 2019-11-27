@@ -51,7 +51,7 @@ class Text2Mel(nn.Module):
                                dropout=0 if decoder_layers == 1 else 0,
                                bidirectional=False)
 
-        self.dec2hid = nn.Sequential(nn.Linear(decoder_size, 500), nn.ReLU(), nn.Dropout(0.5))
+        self.dec2hid = nn.Sequential(nn.Linear(decoder_size + encoder_size * 2, 500), nn.ReLU(), nn.Dropout(0.5))
         self.dropout = nn.Dropout(0.1)
         self.output_mgc = nn.Sequential(nn.Linear(500, mgc_size * pframes))
         self.output_stop = nn.Sequential(nn.Linear(mgc_size * pframes, self.pframes), nn.Sigmoid())
@@ -96,7 +96,10 @@ class Text2Mel(nn.Module):
             decoder_input = torch.cat((att, m_proj), dim=1)
             decoder_output, decoder_hidden = self.decoder(decoder_input.unsqueeze(0), hx=decoder_hidden)
             decoder_output = decoder_output.permute(1, 0, 2)
-            decoder_output = self.dec2hid(decoder_output)
+            # from ipdb import set_trace
+            # set_trace()
+            pre_hid = torch.cat((att.unsqueeze(1), decoder_output), dim=2)
+            decoder_output = self.dec2hid(pre_hid)
             out_mgc = self.output_mgc(decoder_output)
             out_stop = self.output_stop(out_mgc.detach())
             for iFrame in range(self.pframes):
@@ -307,8 +310,8 @@ def _start_train(params):
             num_mgcs = [m.shape[0] // 3 for m in mgc]
             if not params.disable_guided_attention:
                 target_att = _compute_guided_attention(num_tokens, num_mgcs, device=params.device)
-            loss_bce = abs_loss(pred_mgc.view(-1), target_mgc.view(-1)) * 80 + \
-                       abs_loss(pred_pre.view(-1), target_mgc.view(-1)) * 80 + \
+            loss_bce = abs_loss(pred_mgc.view(-1), target_mgc.view(-1)) + \
+                       abs_loss(pred_pre.view(-1), target_mgc.view(-1)) + \
                        bce_loss(pred_stop.view(-1), target_stop.view(-1))  # + \
             if not params.disable_guided_attention:
                 loss_bce += (pred_att * target_att).mean()

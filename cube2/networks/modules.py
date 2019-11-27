@@ -152,19 +152,27 @@ class PostNet(nn.Module):
         super(PostNet, self).__init__()
         self.network = nn.Sequential(
             nn.Conv1d(num_mels, filter_size, kernel_size, padding=kernel_size // 2),
+            nn.BatchNorm1d(512),
             nn.Tanh(),
             nn.Dropout(0.5),
             nn.Conv1d(filter_size, filter_size, kernel_size, padding=kernel_size // 2),
+            nn.BatchNorm1d(512),
             nn.Tanh(),
             nn.Dropout(0.5),
             nn.Conv1d(filter_size, filter_size, kernel_size, padding=kernel_size // 2),
+            nn.BatchNorm1d(512),
             nn.Tanh(),
             nn.Dropout(0.5),
             nn.Conv1d(filter_size, filter_size, kernel_size, padding=kernel_size // 2),
+            nn.BatchNorm1d(512),
             nn.Tanh(),
             nn.Dropout(0.5),
             nn.Conv1d(filter_size, num_mels, kernel_size, padding=kernel_size // 2),
+            nn.BatchNorm1d(num_mels)
         )
+        for ii in range(len(self.network) // 4):
+            torch.nn.init.xavier_uniform_(
+                self.network[ii * 4].weight, gain=torch.nn.init.calculate_gain('linear'))
 
     def forward(self, x):
         x = x.permute(0, 2, 1)
