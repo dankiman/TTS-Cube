@@ -19,6 +19,7 @@ import sys
 import torch.nn as nn
 import numpy as np
 import json
+import random
 
 sys.path.append('')
 from cube2.networks.modules import Attention, PostNet
@@ -27,20 +28,24 @@ from os.path import exists
 
 class Text2Mel(nn.Module):
     def __init__(self, encodings, char_emb_size=100, encoder_size=256, encoder_layers=1, decoder_size=1024,
-                 decoder_layers=2, mgc_size=80, pframes=3):
+                 decoder_layers=2, mgc_size=80, pframes=3, teacher_forcing=0.5):
         super(Text2Mel, self).__init__()
         self.MGC_PROJ_SIZE = 256
 
         self.encodings = encodings
+        self.teacher_forcing = teacher_forcing
         self.pframes = pframes
         self.mgc_order = mgc_size
         self.char_emb = nn.Embedding(len(self.encodings.char2int), char_emb_size, padding_idx=0)
         self.case_emb = nn.Embedding(4, 16, padding_idx=0)
-        self.char_conv = nn.Sequential(nn.Conv1d(char_emb_size + 16, 512, 5, padding=2), nn.ReLU(),
+        self.char_conv = nn.Sequential(nn.Conv1d(char_emb_size + 16, 512, 5, padding=2),
+                                       nn.ReLU(),
                                        nn.Dropout(0.5),
-                                       nn.Conv1d(512, 512, 5, padding=2), nn.ReLU(),
+                                       nn.Conv1d(512, 512, 5, padding=2),
+                                       nn.ReLU(),
                                        nn.Dropout(0.5),
-                                       nn.Conv1d(512, 512, 5, padding=2), nn.ReLU(),
+                                       nn.Conv1d(512, 512, 5, padding=2),
+                                       nn.ReLU(),
                                        nn.Dropout(0.5)
                                        )
         self.mgc_proj = nn.Sequential(nn.Linear(mgc_size, self.MGC_PROJ_SIZE), nn.ReLU(), nn.Dropout(0.5),
@@ -85,7 +90,7 @@ class Text2Mel(nn.Module):
         lst_output = []
         lst_stop = []
         lst_att = []
-
+        index = 0
         while True:
             att_vec, att = self.att(decoder_hidden[-1][-1].unsqueeze(0), encoder_output)
             lst_att.append(att_vec.unsqueeze(1))
@@ -106,7 +111,11 @@ class Text2Mel(nn.Module):
                 lst_output.append(out_mgc[:, :, iFrame * self.mgc_order:iFrame * self.mgc_order + self.mgc_order])
                 lst_stop.append(out_stop[:, :, iFrame])
             if gs_mgc is not None:
-                last_mgc = gs_mgc[:, index, :]
+                prob = random.random()
+                if prob > self.teacher_forcing:
+                    last_mgc = gs_mgc[:, index, :]
+                else:
+                    last_mgc = out_mgc[:, :, -self.mgc_order:].squeeze(1)
             else:
                 last_mgc = out_mgc[:, :, -self.mgc_order:].squeeze(1)
             index += 1
@@ -281,11 +290,11 @@ def _start_train(params):
     else:
         _update_encodings(encodings, trainset)
         encodings.store('data/text2mel.encodings')
-    text2mel = Text2Mel(encodings)
+    text2mel = Text2Mel(encodings, teacher_forcing=params.teacher_forcing)
     if params.resume:
         text2mel.load('data/text2mel.last')
     text2mel.to('cuda:0')
-    optimizer_gen = torch.optim.Adam(text2mel.parameters(), lr=params.lr)
+    optimizer_gen = torch.optim.Adam(text2mel.parameters(), lr=params.lr, weight_decay=1e-6)
     text2mel.save('data/text2mel.last')
 
     test_steps = 500
@@ -310,15 +319,15 @@ def _start_train(params):
             num_mgcs = [m.shape[0] // 3 for m in mgc]
             if not params.disable_guided_attention:
                 target_att = _compute_guided_attention(num_tokens, num_mgcs, device=params.device)
-            loss_bce = abs_loss(pred_mgc.view(-1), target_mgc.view(-1)) + \
-                       abs_loss(pred_pre.view(-1), target_mgc.view(-1)) + \
+            loss_bce = mse_loss(pred_mgc.view(-1), target_mgc.view(-1)) + \
+                       mse_loss(pred_pre.view(-1), target_mgc.view(-1)) * 0.5 + \
                        bce_loss(pred_stop.view(-1), target_stop.view(-1))  # + \
             if not params.disable_guided_attention:
                 loss_bce += (pred_att * target_att).mean()
             loss = loss_bce
             optimizer_gen.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(text2mel.parameters(), 5.)
+            torch.nn.utils.clip_grad_norm_(text2mel.parameters(), 1.)
             optimizer_gen.step()
             lss_bce = loss_bce.item()
             total_loss_bce += lss_bce
@@ -388,13 +397,18 @@ if __name__ == '__main__':
                       help='Num epochs without improvement (default=20)')
     parser.add_option("--batch-size", action='store', dest='batch_size', default='16', type='int',
                       help='number of samples in a single batch (default=32)')
-    parser.add_option("--resume", action='store_true', dest='resume', help='Resume from previous checkpoint')
-    parser.add_option("--use-gan", action='store_true', dest='use_gan', help='Resume from previous checkpoint')
+    parser.add_option("--resume", action='store_true', dest='resume',
+                      help='Resume from previous checkpoint')
+    parser.add_option("--use-gan", action='store_true', dest='use_gan',
+                      help='Resume from previous checkpoint')
     parser.add_option("--synth-test", action="store_true", dest="test")
-    parser.add_option("--temperature", action="store", dest="temperature", type='float', default=1.0)
     parser.add_option("--device", action="store", dest="device", default='cuda:0')
-    parser.add_option("--lr", action="store", dest="lr", default=1e-3, type=float)
-    parser.add_option("--disable-guided-attention", action="store_true", dest="disable_guided_attention")
+    parser.add_option("--lr", action="store", dest="lr", default=2e-4, type=float, help='Learning rate (default=2e-4)')
+    parser.add_option("--teacher-forcing", action="store", dest="teacher_forcing", default=0.5, type=float,
+                      help='Probability to use generated samples instead of ground '
+                           'truth for training: 0.0-never 1.0-always (default=0.5)')
+    parser.add_option("--disable-guided-attention", action="store_true", dest="disable_guided_attention",
+                      help='Disable guided attention (monotonic)')
 
     (params, _) = parser.parse_args(sys.argv)
     if params.test:

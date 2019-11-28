@@ -168,11 +168,11 @@ class PostNet(nn.Module):
             nn.Tanh(),
             nn.Dropout(0.5),
             nn.Conv1d(filter_size, num_mels, kernel_size, padding=kernel_size // 2),
-            nn.BatchNorm1d(num_mels)
         )
-        for ii in range(len(self.network) // 4):
+        for ii in range((len(self.network) // 4)):
             torch.nn.init.xavier_uniform_(
-                self.network[ii * 4].weight, gain=torch.nn.init.calculate_gain('linear'))
+                self.network[ii * 4].weight, gain=torch.nn.init.calculate_gain('tanh'))
+        torch.nn.init.xavier_uniform_(self.network[-1].weight, gain=torch.nn.init.calculate_gain('linear'))
 
     def forward(self, x):
         x = x.permute(0, 2, 1)
