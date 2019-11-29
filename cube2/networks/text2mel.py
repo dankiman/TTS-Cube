@@ -305,7 +305,7 @@ def _start_train(params):
     mse_loss = torch.nn.MSELoss(reduction='mean')
     while patience_left > 0:
         text2mel.train()
-        total_loss_bce = 0.0
+        total_loss = 0.0
         progress = tqdm.tqdm(range(test_steps))
         for step in progress:
             sys.stdout.flush()
@@ -319,33 +319,33 @@ def _start_train(params):
             num_mgcs = [m.shape[0] // 3 for m in mgc]
             if not params.disable_guided_attention:
                 target_att = _compute_guided_attention(num_tokens, num_mgcs, device=params.device)
-            loss_bce = mse_loss(pred_mgc.view(-1), target_mgc.view(-1)) + \
-                       mse_loss(pred_pre.view(-1), target_mgc.view(-1)) * 0.5 + \
-                       bce_loss(pred_stop.view(-1), target_stop.view(-1))  # + \
+            loss_comb = mse_loss(pred_mgc.view(-1), target_mgc.view(-1)) + \
+                        mse_loss(pred_pre.view(-1), target_mgc.view(-1)) * 0.5 + \
+                        bce_loss(pred_stop.view(-1), target_stop.view(-1))  # + \
             if not params.disable_guided_attention:
-                loss_bce += (pred_att * target_att).mean()
-            loss = loss_bce
+                loss_comb += (pred_att * target_att).mean()
+            loss = loss_comb
             optimizer_gen.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(text2mel.parameters(), 1.)
             optimizer_gen.step()
-            lss_bce = loss_bce.item()
-            total_loss_bce += lss_bce
+            lss_comb = loss_comb.item()
+            total_loss += lss_comb
 
-            progress.set_description('BCE_LOSS={0:.4}'.format(lss_bce))
+            progress.set_description('LOSS={0:.4}'.format(lss_comb))
 
         g_loss = _eval(text2mel, devset, params)
         sys.stdout.flush()
         sys.stderr.flush()
         sys.stdout.write(
-            '\tGlobal step {0} BCE_LOSS={1:.4}\n'.format(global_step, total_loss_bce / test_steps))
+            '\tGlobal step {0} LOSS={1:.4}\n'.format(global_step, total_loss / test_steps))
         sys.stdout.write('\tDevset evaluation: {0}\n'.format(g_loss))
         if g_loss < best_gloss:
             best_gloss = g_loss
             sys.stdout.write('\tStoring data/text2mel.best\n')
             text2mel.save('data/text2mel.best')
 
-        if not np.isnan(total_loss_bce):
+        if not np.isnan(total_loss):
             sys.stdout.write('\tStoring data/text2mel.last\n')
             text2mel.save('data/text2mel.last')
         else:
@@ -403,10 +403,10 @@ if __name__ == '__main__':
                       help='Resume from previous checkpoint')
     parser.add_option("--synth-test", action="store_true", dest="test")
     parser.add_option("--device", action="store", dest="device", default='cuda:0')
-    parser.add_option("--lr", action="store", dest="lr", default=2e-4, type=float, help='Learning rate (default=2e-4)')
-    parser.add_option("--teacher-forcing", action="store", dest="teacher_forcing", default=0.5, type=float,
+    parser.add_option("--lr", action="store", dest="lr", default=1e-3, type=float, help='Learning rate (default=1e-3)')
+    parser.add_option("--teacher-forcing", action="store", dest="teacher_forcing", default=0.0, type=float,
                       help='Probability to use generated samples instead of ground '
-                           'truth for training: 0.0-never 1.0-always (default=0.5)')
+                           'truth for training: 0.0-never 1.0-always (default=0.0)')
     parser.add_option("--disable-guided-attention", action="store_true", dest="disable_guided_attention",
                       help='Disable guided attention (monotonic)')
 
