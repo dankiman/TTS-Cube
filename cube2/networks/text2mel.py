@@ -294,7 +294,7 @@ def _start_train(params):
     if params.resume:
         text2mel.load('data/text2mel.last')
     text2mel.to('cuda:0')
-    optimizer_gen = torch.optim.Adam(text2mel.parameters(), lr=params.lr, weight_decay=1e-6)
+    optimizer_gen = torch.optim.Adam(text2mel.parameters(), lr=params.lr)
     text2mel.save('data/text2mel.last')
 
     test_steps = 500
@@ -395,15 +395,15 @@ if __name__ == '__main__':
     parser = optparse.OptionParser()
     parser.add_option('--patience', action='store', dest='patience', default=20, type='int',
                       help='Num epochs without improvement (default=20)')
-    parser.add_option("--batch-size", action='store', dest='batch_size', default='16', type='int',
-                      help='number of samples in a single batch (default=32)')
+    parser.add_option("--batch-size", action='store', dest='batch_size', default='12', type='int',
+                      help='number of samples in a single batch (default=12)')
     parser.add_option("--resume", action='store_true', dest='resume',
                       help='Resume from previous checkpoint')
     parser.add_option("--use-gan", action='store_true', dest='use_gan',
                       help='Resume from previous checkpoint')
     parser.add_option("--synth-test", action="store_true", dest="test")
     parser.add_option("--device", action="store", dest="device", default='cuda:0')
-    parser.add_option("--lr", action="store", dest="lr", default=1e-3, type=float, help='Learning rate (default=1e-3)')
+    parser.add_option("--lr", action="store", dest="lr", default=2e-4, type=float, help='Learning rate (default=2e-4)')
     parser.add_option("--teacher-forcing", action="store", dest="teacher_forcing", default=0.0, type=float,
                       help='Probability to use generated samples instead of ground '
                            'truth for training: 0.0-never 1.0-always (default=0.0)')
