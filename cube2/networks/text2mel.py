@@ -95,8 +95,8 @@ class Text2Mel(nn.Module):
             att_vec, att = self.att(decoder_hidden[-1][-1].unsqueeze(0), encoder_output)
             lst_att.append(att_vec.unsqueeze(1))
             m_proj = self.mgc_proj(last_mgc)
-            # if gs_mgc is None:
-            #    m_proj = torch.dropout(m_proj, 0.5, True)
+            if gs_mgc is None:
+                m_proj = torch.dropout(m_proj, 0.5, True)
 
             decoder_input = torch.cat((att, m_proj), dim=1)
             decoder_output, decoder_hidden = self.decoder(decoder_input.unsqueeze(0), hx=decoder_hidden)
@@ -212,8 +212,34 @@ class DataLoader:
         #       torch.tensor(batch_mgc, device=device, dtype=torch.float32)
 
 
-def _eval(model, dataset, params):
-    return 0
+def _eval(text2mel, dataset, params, mse_loss):
+    import tqdm
+    text2mel.eval()
+    test_steps = 50
+    with torch.no_grad():
+        total_loss = 0.0
+        progress = tqdm.tqdm(range(test_steps))
+        for step in progress:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            x, mgc = dataset.get_batch(batch_size=params.batch_size)
+            pred_mgc, pred_pre, pred_stop, pred_att = text2mel(x, gs_mgc=mgc)
+            target_mgc, target_stop = _make_batch(mgc, device=params.device)
+
+            num_tokens = [len(seq) for seq in x]
+            num_mgcs = [m.shape[0] // 3 for m in mgc]
+            if not params.disable_guided_attention:
+                target_att = _compute_guided_attention(num_tokens, num_mgcs, device=params.device)
+            loss_comb = mse_loss(pred_mgc.view(-1), target_mgc.view(-1)) + \
+                        mse_loss(pred_pre.view(-1), target_mgc.view(-1)) * 0.5
+            if not params.disable_guided_attention:
+                loss_comb += (pred_att * target_att).mean()
+            loss = loss_comb
+            lss_comb = loss_comb.item()
+            total_loss += lss_comb
+
+            progress.set_description('LOSS={0:.4}'.format(lss_comb))
+        return total_loss / test_steps
 
 
 def _update_encodings(encodings, dataset):
@@ -299,10 +325,12 @@ def _start_train(params):
 
     test_steps = 500
     global_step = 0
-    best_gloss = _eval(text2mel, devset, params)
+
     bce_loss = torch.nn.BCELoss()
     abs_loss = torch.nn.L1Loss(reduction='mean')
     mse_loss = torch.nn.MSELoss(reduction='mean')
+    best_gloss = _eval(text2mel, devset, params, mse_loss)
+    sys.stdout.write('Devset loss={0}\n'.format(best_gloss))
     while patience_left > 0:
         text2mel.train()
         total_loss = 0.0
@@ -334,7 +362,7 @@ def _start_train(params):
 
             progress.set_description('LOSS={0:.4}'.format(lss_comb))
 
-        g_loss = _eval(text2mel, devset, params)
+        g_loss = _eval(text2mel, devset, params, mse_loss)
         sys.stdout.flush()
         sys.stderr.flush()
         sys.stdout.write(
