@@ -95,18 +95,26 @@ class Text2Mel(nn.Module):
             att_vec, att = self.att(decoder_hidden[-1][-1].unsqueeze(0), encoder_output)
             lst_att.append(att_vec.unsqueeze(1))
             m_proj = self.mgc_proj(last_mgc)
-            if gs_mgc is None:
-                m_proj = torch.dropout(m_proj, 0.5, True)
+            # if gs_mgc is not None:
+            #     m_proj = self.mgc_proj(last_mgc)
+            # else:
+            #     m_proj = last_mgc
+            #     ii = 0
+            #     for module in self.mgc_proj:
+            #         ii += 1
+            #         m_proj = module(m_proj)
+            #         if ii % 3 == 0:
+            #             m_proj = torch.dropout(m_proj, 0.5, True)
+            # if gs_mgc is None:
+            #     m_proj = torch.dropout(m_proj, 0.5, True)
 
             decoder_input = torch.cat((att, m_proj), dim=1)
             decoder_output, decoder_hidden = self.decoder(decoder_input.unsqueeze(0), hx=decoder_hidden)
             decoder_output = decoder_output.permute(1, 0, 2)
-            # from ipdb import set_trace
-            # set_trace()
             pre_hid = torch.cat((att.unsqueeze(1), decoder_output), dim=2)
             decoder_output = self.dec2hid(pre_hid)
             out_mgc = self.output_mgc(decoder_output)
-            out_stop = self.output_stop(out_mgc.detach())
+            out_stop = self.output_stop(decoder_output[:, :, :self.mgc_order * 3])
             for iFrame in range(self.pframes):
                 lst_output.append(out_mgc[:, :, iFrame * self.mgc_order:iFrame * self.mgc_order + self.mgc_order])
                 lst_stop.append(out_stop[:, :, iFrame])
@@ -115,7 +123,7 @@ class Text2Mel(nn.Module):
                 if prob > self.teacher_forcing:
                     last_mgc = gs_mgc[:, index, :]
                 else:
-                    last_mgc = out_mgc[:, :, -self.mgc_order:].squeeze(1)
+                    last_mgc = out_mgc[:, :, -self.mgc_order:].detach().squeeze(1)
             else:
                 last_mgc = out_mgc[:, :, -self.mgc_order:].squeeze(1)
             index += 1
@@ -224,7 +232,7 @@ def _eval(text2mel, dataset, params, mse_loss):
             sys.stderr.flush()
             x, mgc = dataset.get_batch(batch_size=params.batch_size)
             pred_mgc, pred_pre, pred_stop, pred_att = text2mel(x, gs_mgc=mgc)
-            target_mgc, target_stop = _make_batch(mgc, device=params.device)
+            target_mgc, target_stop, target_size = _make_batch(mgc, device=params.device)
 
             num_tokens = [len(seq) for seq in x]
             num_mgcs = [m.shape[0] // 3 for m in mgc]
@@ -266,6 +274,8 @@ def _make_batch(gs_mgc, device='cpu'):
     # gs_mgc = torch.tensor(gs_mgc, dtype=self._get_device())
     tmp_mgc = np.zeros((len(gs_mgc), max_len, gs_mgc[0].shape[1]))
     tmp_stop = np.zeros((len(gs_mgc), max_len))
+    gs_size = [mgc.shape[0] for mgc in gs_mgc]
+
     for ii in range(max_len):
         index = ii
         for iB in range(len(gs_mgc)):
@@ -278,7 +288,7 @@ def _make_batch(gs_mgc, device='cpu'):
 
     gs_mgc = torch.tensor(tmp_mgc, device=device, dtype=torch.float)
     gs_stop = torch.tensor(tmp_stop, device=device, dtype=torch.float)
-    return gs_mgc, gs_stop
+    return gs_mgc, gs_stop, gs_size
 
 
 def _compute_guided_attention(num_tokens, num_mgc, device='cpu'):
@@ -341,15 +351,29 @@ def _start_train(params):
             global_step += 1
             x, mgc = trainset.get_batch(batch_size=params.batch_size)
             pred_mgc, pred_pre, pred_stop, pred_att = text2mel(x, gs_mgc=mgc)
-            target_mgc, target_stop = _make_batch(mgc, device=params.device)
+            target_mgc, target_stop, target_size = _make_batch(mgc, device=params.device)
 
             num_tokens = [len(seq) for seq in x]
             num_mgcs = [m.shape[0] // 3 for m in mgc]
             if not params.disable_guided_attention:
                 target_att = _compute_guided_attention(num_tokens, num_mgcs, device=params.device)
-            loss_comb = mse_loss(pred_mgc.view(-1), target_mgc.view(-1)) + \
-                        mse_loss(pred_pre.view(-1), target_mgc.view(-1)) * 0.5 + \
-                        bce_loss(pred_stop.view(-1), target_stop.view(-1))  # + \
+
+            lst_gs = []
+            lst_pre_mgc = []
+            lst_post_mgc = []
+
+            for sz in target_size:
+                lst_gs.append(target_mgc[:, :sz, :])
+                lst_pre_mgc.append(pred_pre[:, :sz, :])
+                lst_post_mgc.append(pred_mgc[:, :sz, :])
+
+            l_tar_mgc = torch.cat(lst_gs, dim=1)
+            l_pre_mgc = torch.cat(lst_pre_mgc, dim=1)
+            l_post_mgc = torch.cat(lst_post_mgc, dim=1)
+            loss_comb = mse_loss(l_post_mgc.view(-1), l_tar_mgc.view(-1)) + \
+                        mse_loss(l_pre_mgc.view(-1), l_tar_mgc.view(-1))
+
+            loss_comb += bce_loss(pred_stop.view(-1), target_stop.view(-1))
             if not params.disable_guided_attention:
                 loss_comb += (pred_att * target_att).mean()
             loss = loss_comb
