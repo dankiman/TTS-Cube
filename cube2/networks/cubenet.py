@@ -23,7 +23,7 @@ import tqdm
 
 sys.path.append('')
 from cube2.io_modules.dataset import Dataset
-from cube2.networks.vocoder import CubeNet
+from cube2.networks.vocoder import CubeNet2
 
 
 class DataLoader:
@@ -105,7 +105,7 @@ def _start_train(params):
     patience_left = params.patience
     trainset = DataLoader(trainset)
     devset = DataLoader(devset)
-    cubenet = CubeNet()
+    cubenet = CubeNet2()
     if params.resume:
         cubenet.load('data/cube.last')
     cubenet.to('cuda:0')

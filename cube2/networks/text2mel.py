@@ -91,8 +91,10 @@ class Text2Mel(nn.Module):
         lst_stop = []
         lst_att = []
         index = 0
+        prev_att_vec = None
         while True:
             att_vec, att = self.att(decoder_hidden[-1][-1].unsqueeze(0), encoder_output)
+
             lst_att.append(att_vec.unsqueeze(1))
             m_proj = self.mgc_proj(last_mgc)
             # if gs_mgc is not None:
@@ -105,8 +107,6 @@ class Text2Mel(nn.Module):
             #         m_proj = module(m_proj)
             #         if ii % 3 == 0:
             #             m_proj = torch.dropout(m_proj, 0.5, True)
-            # if gs_mgc is None:
-            #     m_proj = torch.dropout(m_proj, 0.5, True)
 
             decoder_input = torch.cat((att, m_proj), dim=1)
             decoder_output, decoder_hidden = self.decoder(decoder_input.unsqueeze(0), hx=decoder_hidden)
@@ -139,6 +139,12 @@ class Text2Mel(nn.Module):
         stop = torch.cat(lst_stop, dim=1)  # .view(len(input), -1)
         att = torch.cat(lst_att, dim=1)
         return mgc + self.postnet(mgc), mgc, stop, att
+
+    def _correct_attention(self, att, att_vec, prev_att_vec, encoder_outputs):
+        # TODO: add method for correcting skipped and reversed encoder_outputs
+        if prev_att_vec is None:
+            return att_vec, att
+        return att_vec, att
 
     def _make_input(self, input):
         max_len = max([len(seq) for seq in input])
