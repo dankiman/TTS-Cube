@@ -32,11 +32,11 @@ class UpsampleNet(nn.Module):
         self.output_transform = nn.Linear(input_size, output_size)
 
     def forward(self, x):
-        if self.training:
-            noise = torch.randn_like(x)
-            noise = noise * 0.01
-            # noise += 1
-            x = x + noise
+        # if self.training:
+        #     noise = torch.randn_like(x)
+        #     noise = noise * 0.01
+        #     # noise += 1
+        #     x = x + noise
         x = torch.clamp(x, min=0, max=1)
         c = x.permute(0, 2, 1)
         if self.upsample_conv is not None:

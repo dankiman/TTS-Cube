@@ -75,11 +75,49 @@ class DataLoader:
 
 def gaussian_loss(mean, logvar, y, log_std_min=-7.0):
     import math
-    log_std = torch.clamp(logvar, min=log_std_min).view(-1)
-    mean = mean.view(-1)
-    y = y.view(-1)
+    log_std = torch.clamp(logvar, min=log_std_min).reshape(-1)
+    mean = mean.reshape(-1)
+    y = y.reshape(-1)
     log_probs = -0.5 * (- math.log(2.0 * math.pi) - 2. * log_std - torch.pow(y - mean, 2) * torch.exp((-2.0 * log_std)))
     return log_probs.squeeze().mean()
+
+
+def KL_gaussians(mu_q, logs_q, mu_p, logs_p, log_std_min=-7.0, regularization=True):
+    # KL (q || p)
+    # q ~ N(mu_q, logs_q.exp_()), p ~ N(mu_p, logs_p.exp_())
+    logs_q = torch.clamp(logs_q, min=log_std_min)
+    logs_p = torch.clamp(logs_p, min=log_std_min)
+    KL_loss = (logs_p - logs_q) + 0.5 * (
+            (torch.exp(2. * logs_q) + torch.pow(mu_p - mu_q, 2)) * torch.exp(-2. * logs_p) - 1.)
+    if regularization:
+        reg_loss = torch.pow(logs_q - logs_p, 2)
+    else:
+        reg_loss = None
+    return KL_loss, reg_loss
+
+
+def kl_loss(mu_q, logs_q, mu_p, logs_p, regularization=True, size_average=True):
+    KL_loss, reg_loss = KL_gaussians(mu_q, logs_q, mu_p, logs_p, regularization=regularization)
+    loss_tot = KL_loss + reg_loss * 4.
+
+    if size_average:
+        return loss_tot.mean(), KL_loss.mean(), reg_loss.mean()
+    else:
+        return loss_tot.sum(), KL_loss.sum(), reg_loss.sum()
+
+
+def power_loss(p_y, t_y):
+    fft_orig = torch.stft(t_y.reshape(-1), n_fft=512,
+                          window=torch.hann_window(window_length=512).to('cuda:0'))
+    fft_pred = torch.stft(p_y.reshape(-1), n_fft=512,
+                          window=torch.hann_window(window_length=512).to('cuda:0'))
+    real_orig = fft_orig[:, :, 0]
+    im_org = fft_orig[:, :, 1]
+    power_orig = torch.sqrt(torch.pow(real_orig, 2) + torch.pow(im_org, 2))
+    real_pred = fft_pred[:, :, 0]
+    im_pred = fft_pred[:, :, 1]
+    power_pred = torch.sqrt(torch.pow(real_pred, 2) + torch.pow(im_pred, 2))
+    return torch.pow(power_orig - power_pred, 2).mean()
 
 
 def _eval(model, dataset, params):
@@ -105,9 +143,19 @@ def _start_train(params):
     patience_left = params.patience
     trainset = DataLoader(trainset)
     devset = DataLoader(devset)
-    cubenet = CubeNet2()
+    if params.model == 'teacher':
+        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1, use_noise=False)
+        model_name = 'data/cube-teacher'
+    else:
+        cubenet_teacher = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1, use_noise=False)
+        model_name = 'data/cube-teacher'
+        cubenet_teacher.load('{0}.best'.format(model_name))
+        cubenet_teacher.to('cuda:0')
+        cubenet_teacher.eval()
+        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, use_noise=True)
+        model_name = 'data/cube-student'
     if params.resume:
-        cubenet.load('data/cube.last')
+        cubenet.load('{0}.best'.format(model_name))
     cubenet.to('cuda:0')
     optimizer_gen = torch.optim.Adam(cubenet.parameters(), lr=params.lr)
 
@@ -123,11 +171,18 @@ def _start_train(params):
             sys.stderr.flush()
             global_step += 1
             x, mgc = trainset.get_batch(batch_size=params.batch_size)
-            # from ipdb import set_trace
-            # set_trace()
             mean, logvar, pred_y = cubenet(mgc, x=x)
+            if params.model == 'teacher':
+                loss_gauss = gaussian_loss(mean, logvar, x)
+            else:
+                m_t, l_t, p_t = cubenet_teacher(mgc, x=pred_y.reshape(x.size()))
+                m_s = mean.reshape(m_t.size())
+                l_s = logvar.reshape(m_t.size())
+                m_t = m_t.detach()
+                l_t = l_t.detach()
+                loss_gauss = kl_loss(m_s, l_s, m_t, l_t)[0]
+                loss_gauss += power_loss(pred_y, x)
 
-            loss_gauss = gaussian_loss(mean, logvar, x)
             loss = loss_gauss
             optimizer_gen.zero_grad()
             loss.backward()
@@ -136,22 +191,22 @@ def _start_train(params):
             lss_gauss = loss_gauss.item()
             total_loss_gauss += lss_gauss
 
-            progress.set_description('GAUSSIAN_LOSS={0:.4}'.format(lss_gauss))
+            progress.set_description('LOSS={0:.4}'.format(lss_gauss))
 
         g_loss = _eval(cubenet, devset, params)
         sys.stdout.flush()
         sys.stderr.flush()
         sys.stdout.write(
-            '\tGlobal step {0} GAUSSIAN_LOSS={1:.4}\n'.format(global_step, total_loss_gauss / test_steps))
+            '\tGlobal step {0} LOSS={1:.4}\n'.format(global_step, total_loss_gauss / test_steps))
         sys.stdout.write('\tDevset evaluation: {0}\n'.format(g_loss))
         if g_loss < best_gloss:
             best_gloss = g_loss
             sys.stdout.write('\tStoring data/cube.best\n')
-            cubenet.save('data/cube.best')
+            cubenet.save('{0}.best'.format(model_name))
 
         if not np.isnan(total_loss_gauss):
             sys.stdout.write('\tStoring data/cube.last\n')
-            cubenet.save('data/cube.last')
+            cubenet.save('{0}.last'.format(model_name))
         else:
             sys.stdout.write('exiting because of nan loss')
             sys.exit(0)
@@ -160,8 +215,14 @@ def _start_train(params):
 def _test_synth(params):
     devset = Dataset("data/processed/dev")
     devset = DataLoader(devset)
-    cubenet = CubeNet()
-    cubenet.load('data/cube.last')
+    if params.model == 'teacher':
+        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1, use_noise=False)
+        model_name = 'data/cube-teacher'
+    else:
+        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, use_noise=True)
+        model_name = 'data/cube-student'
+
+    cubenet.load('{0}.best'.format(model_name))
     cubenet.to(params.device)
     cubenet.eval()
     import time
@@ -192,6 +253,7 @@ if __name__ == '__main__':
     parser.add_option("--temperature", action="store", dest="temperature", type='float', default=1.0)
     parser.add_option("--device", action="store", dest="device", default='cuda:0')
     parser.add_option("--lr", action="store", dest="lr", default=1e-3, type=float)
+    parser.add_option("--model", action="store", dest='model', choices=['teacher', 'student'], default='teacher')
 
     (params, _) = parser.parse_args(sys.argv)
     if params.test:

@@ -91,11 +91,16 @@ class CubeNetOLD(nn.Module):
 
 class CubeNet2(nn.Module):
     def __init__(self, mgc_size=80, lstm_size=500, lstm_layers=1, upsample_scales_input=[4, 4],
-                 output_samples=16):
-        super(CubeNet, self).__init__()
+                 output_samples=16, use_noise=False):
+        super(CubeNet2, self).__init__()
         self.output_samples = output_samples
+        self.use_noise = use_noise
         self.upsample_input = UpsampleNet(mgc_size, 256, upsample_scales_input)
-        self.rnn = nn.LSTM(256 + output_samples, lstm_size, num_layers=lstm_layers)
+        if use_noise:
+            cond_size = 256 + output_samples * 2
+        else:
+            cond_size = 256 + output_samples
+        self.rnn = nn.LSTM(cond_size, lstm_size, num_layers=lstm_layers)
         self.output_samples = output_samples
         self.output = nn.Linear(lstm_size, 2 * output_samples)
 
@@ -115,40 +120,45 @@ class CubeNet2(nn.Module):
 
     def forward(self, mgc, ext_conditioning=None, temperature=1.0, x=None, eps_min=-7):
         cond = self.upsample_input(mgc)
-        from ipdb import set_trace
-        set_trace()
         if x is not None:
+            # from ipdb import set_trace
+            # set_trace()
             x = x.view(x.shape[0], -1)
             x = torch.cat(
                 (torch.zeros((x.shape[0], self.output_samples), device=x.device.type), x[:, 0:-self.output_samples]),
                 dim=1)
             x_rnn = x.view(x.shape[0], x.shape[1] // self.output_samples, -1)
-
+            eps = torch.randn_like(x_rnn)
             rnn_input = torch.cat((cond, x_rnn), dim=2)
+            if self.use_noise:
+                rnn_input = torch.cat((rnn_input, eps), dim=2)
             rnn_output, _ = self.rnn(rnn_input.permute(1, 0, 2))
             rnn_output = rnn_output.permute(1, 0, 2)
             # upsampled_output = self.upsample_output(rnn_output)
             output = self.output(rnn_output)
-            mean = torch.tanh(output[:, :, 0:self.output_samples]).unsqueeze(1)
+            mean = output[:, :, 0:self.output_samples].unsqueeze(1)
             logvar = output[:, :, self.output_samples:].unsqueeze(1)
-            eps = torch.randn_like(mean)
-            zz = self._reparameterize(mean, logvar, eps * temperature)
+            zz = self._reparameterize(mean, logvar, eps.unsqueeze(1) * temperature)
         else:
             mean_list = []
             logvar_list = []
             zz_list = []
             hidden = None
             x = torch.zeros((mgc.shape[0], 1, self.output_samples), device=mgc.device.type)
-            for ii in range(cond.shape[1]):
+            import tqdm
+            for ii in tqdm.tqdm(range(cond.shape[1])):
                 rnn_input = torch.cat((cond[:, ii, :].unsqueeze(1), x), dim=2)
+                eps = torch.randn_like(x)
+                if self.use_noise:
+                    rnn_input = torch.cat((rnn_input, eps), dim=2)
+
                 rnn_output, hidden = self.rnn(rnn_input.permute(1, 0, 2), hx=hidden)
                 rnn_output = rnn_output.permute(1, 0, 2)
                 output = self.output(rnn_output)
-                # from ipdb import set_trace
-                # set_trace()
-                mean = torch.tanh(output[:, :, :self.output_samples])
+
+                mean = output[:, :, :self.output_samples]
                 logvar = output[:, :, self.output_samples:]
-                eps = torch.randn_like(mean)
+
                 zz = self._reparameterize(mean, logvar, eps * temperature, eps_min=eps_min)
                 mean_list.append(mean)
                 logvar_list.append(logvar)
@@ -158,7 +168,6 @@ class CubeNet2(nn.Module):
             mean = torch.cat(mean_list, dim=1)
             logvar = torch.cat(logvar_list, dim=1)
             zz = torch.cat(zz_list, dim=1)
-
         return mean, logvar, zz
 
     def save(self, path):
@@ -210,7 +219,7 @@ class CubeNet(nn.Module):
             rnn_output = rnn_output.permute(1, 0, 2)
             # upsampled_output = self.upsample_output(rnn_output)
             output = self.output(rnn_output)
-            mean = torch.tanh(output[:, :, 0:self.output_samples]).unsqueeze(1)
+            mean = output[:, :, 0:self.output_samples].unsqueeze(1)
             logvar = output[:, :, self.output_samples:].unsqueeze(1)
             eps = torch.randn_like(mean)
             zz = self._reparameterize(mean, logvar, eps * temperature)
@@ -220,14 +229,15 @@ class CubeNet(nn.Module):
             zz_list = []
             hidden = None
             x = torch.zeros((mgc.shape[0], 1, self.output_samples), device=mgc.device.type)
-            for ii in range(cond.shape[1]):
+            import tqdm
+            for ii in tqdm.tqdm(range(cond.shape[1])):
                 rnn_input = torch.cat((cond[:, ii, :].unsqueeze(1), x), dim=2)
                 rnn_output, hidden = self.rnn(rnn_input.permute(1, 0, 2), hx=hidden)
                 rnn_output = rnn_output.permute(1, 0, 2)
                 output = self.output(rnn_output)
                 # from ipdb import set_trace
                 # set_trace()
-                mean = torch.tanh(output[:, :, :self.output_samples])
+                mean = output[:, :, :self.output_samples]
                 logvar = output[:, :, self.output_samples:]
                 eps = torch.randn_like(mean)
                 zz = self._reparameterize(mean, logvar, eps * temperature, eps_min=eps_min)
@@ -239,7 +249,6 @@ class CubeNet(nn.Module):
             mean = torch.cat(mean_list, dim=1)
             logvar = torch.cat(logvar_list, dim=1)
             zz = torch.cat(zz_list, dim=1)
-
         return mean, logvar, zz
 
     def save(self, path):
