@@ -68,14 +68,13 @@ def synthesize(params):
     # from ipdb import set_trace
     # set_trace()
     if params.model == 'teacher':
-        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1, use_noise=False)
-        cubenet.load('{0}-teacher.best'.format(params.cubenet))
+        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1)
+        cubenet.load('{0}-single.best'.format(params.cubenet))
         cubenet.to(params.device)
         cubenet.eval()
     else:
-        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, use_noise=True, lstm_size=500,
-                           lstm_layers=2)
-        cubenet.load('{0}-student.best'.format(params.cubenet))
+        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, lstm_size=500)
+        cubenet.load('{0}-multi.best'.format(params.cubenet))
         cubenet.to(params.device)
         cubenet.eval()
 
@@ -185,7 +184,7 @@ if __name__ == '__main__':
                       help='default: data/text2mel')
     parser.add_option('--cubenet', dest='cubenet', action='store', default='data/cube',
                       help='default: data/cube')
-    parser.add_option('--cubenet-model-type', dest='model', choices=['teacher', 'student'], default='student')
+    parser.add_option('--cubenet-model-type', dest='model', choices=['single', 'multi'], default='single')
     parser.add_option('--output', dest='output', action='store', default='test.wav',
                       help='test.wav')
     parser.add_option('--g2p', dest='g2p', action='store')

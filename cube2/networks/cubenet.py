@@ -128,28 +128,15 @@ def power_loss(p_y, t_y):
     return torch.pow(power_orig - power_pred, 2).mean()
 
 
-def _eval(model, dataset, params, teacher=None):
+def _eval(model, dataset, params):
     model.eval()
     lss_gauss = 0
     with torch.no_grad():
         for step in tqdm.tqdm(range(100)):
             x, mgc = dataset.get_batch(batch_size=params.batch_size)
-            if teacher is None:
-                mean, logvar, pred_y = model(mgc, x=x)
-                loss_gauss = gaussian_loss(mean, logvar, x)
-                lss_gauss += loss_gauss.item()
-            else:
-                mean, logvar, pred_y = model(mgc, x=x)
-                m_t, l_t, p_t = teacher(mgc, x=pred_y.reshape(x.size()))
-                m_s = mean.reshape(m_t.size())
-                l_s = logvar.reshape(m_t.size())
-                m_t = m_t.detach()
-                l_t = l_t.detach()
-                loss_gauss = kl_loss(m_s, l_s, m_t, l_t)[0]
-                # loss_gauss = 0
-                loss_gauss += power_loss(pred_y.view(-1), x.view(-1))
-                # loss_gauss += gaussian_loss(mean, logvar, x)
-                lss_gauss += loss_gauss.item()
+            mean, logvar, pred_y = model(mgc, x=x)
+            loss_gauss = gaussian_loss(mean, logvar, x)
+            lss_gauss += loss_gauss.item()
     return lss_gauss / 100
 
 
@@ -164,19 +151,12 @@ def _start_train(params):
     patience_left = params.patience
     trainset = DataLoader(trainset)
     devset = DataLoader(devset)
-    if params.model == 'teacher':
-        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1, use_noise=False)
-        model_name = 'data/cube-teacher'
-        cubenet_teacher = None
+    if params.model == 'single':
+        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1)
+        model_name = 'data/cube-single'
     else:
-        cubenet_teacher = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1, use_noise=False)
-        model_name = 'data/cube-teacher'
-        cubenet_teacher.load('{0}.best'.format(model_name))
-        cubenet_teacher.to('cuda:0')
-        cubenet_teacher.eval()
-        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, use_noise=True, lstm_size=500,
-                           lstm_layers=5)
-        model_name = 'data/cube-student'
+        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16)
+        model_name = 'data/cube-multi'
     if params.resume:
         cubenet.load('{0}.best'.format(model_name))
     cubenet.to('cuda:0')
@@ -184,7 +164,7 @@ def _start_train(params):
 
     test_steps = 500
     global_step = 0
-    best_gloss = _eval(cubenet, devset, params, teacher=cubenet_teacher)
+    best_gloss = _eval(cubenet, devset, params)
     while patience_left > 0:
         cubenet.train()
         total_loss_gauss = 0.0
@@ -195,18 +175,7 @@ def _start_train(params):
             global_step += 1
             x, mgc = trainset.get_batch(batch_size=params.batch_size)
             mean, logvar, pred_y = cubenet(mgc, x=x)
-            if params.model == 'teacher':
-                loss_gauss = gaussian_loss(mean, logvar, x)
-            else:
-                m_t, l_t, p_t = cubenet_teacher(mgc, x=pred_y.reshape(x.size()))
-                m_s = mean.reshape(m_t.size())
-                l_s = logvar.reshape(m_t.size())
-                m_t = m_t.detach()
-                l_t = l_t.detach()
-                loss_gauss = kl_loss(m_s, l_s, m_t, l_t)[0]
-                # loss_gauss = 0
-                loss_gauss += power_loss(pred_y.view(-1), x.view(-1))
-                # loss_gauss += gaussian_loss(mean, logvar, x)
+            loss_gauss = gaussian_loss(mean, logvar, x)
 
             loss = loss_gauss
             optimizer_gen.zero_grad()
@@ -218,7 +187,7 @@ def _start_train(params):
 
             progress.set_description('LOSS={0:.4}'.format(lss_gauss))
 
-        g_loss = _eval(cubenet, devset, params, teacher=cubenet_teacher)
+        g_loss = _eval(cubenet, devset, params)
         sys.stdout.flush()
         sys.stderr.flush()
         sys.stdout.write(
@@ -226,11 +195,11 @@ def _start_train(params):
         sys.stdout.write('\tDevset evaluation: {0}\n'.format(g_loss))
         if g_loss < best_gloss:
             best_gloss = g_loss
-            sys.stdout.write('\tStoring data/cube.best\n')
+            sys.stdout.write('\tStoring data/{0}.best\n'.format(model_name))
             cubenet.save('{0}.best'.format(model_name))
 
         if not np.isnan(total_loss_gauss):
-            sys.stdout.write('\tStoring data/cube.last\n')
+            sys.stdout.write('\tStoring data/{0}.last\n'.format(model_name))
             cubenet.save('{0}.last'.format(model_name))
         else:
             sys.stdout.write('exiting because of nan loss')
@@ -241,12 +210,11 @@ def _test_synth(params):
     devset = Dataset("data/processed/dev")
     devset = DataLoader(devset)
     if params.model == 'teacher':
-        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1, use_noise=False)
-        model_name = 'data/cube-teacher'
+        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1)
+        model_name = 'data/cube-single'
     else:
-        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, use_noise=True, lstm_size=500,
-                           lstm_layers=5)
-        model_name = 'data/cube-student'
+        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16)
+        model_name = 'data/cube-multi'
 
     cubenet.load('{0}.best'.format(model_name))
     cubenet.to(params.device)
@@ -281,7 +249,7 @@ if __name__ == '__main__':
     parser.add_option("--temperature", action="store", dest="temperature", type='float', default=1.0)
     parser.add_option("--device", action="store", dest="device", default='cuda:0')
     parser.add_option("--lr", action="store", dest="lr", default=1e-3, type=float)
-    parser.add_option("--model", action="store", dest='model', choices=['teacher', 'student'], default='teacher')
+    parser.add_option("--model", action="store", dest='model', choices=['single', 'multi'], default='single')
 
     (params, _) = parser.parse_args(sys.argv)
     if params.test:
