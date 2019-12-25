@@ -40,7 +40,7 @@ class MelVocoder:
     def __init__(self):
         self._mel_basis = None
 
-    def fft(self, y, sample_rate, use_preemphasis=True):
+    def fft(self, y, sample_rate, use_preemphasis=False):
         if use_preemphasis:
             pre_y = self.preemphasis(y)
         else:
@@ -52,8 +52,11 @@ class MelVocoder:
         y = y.transpose()
         return self._istft(y, sample_rate)
 
-    def melspectrogram(self, y, sample_rate, num_mels):
-        pre_y = self.preemphasis(y)
+    def melspectrogram(self, y, sample_rate, num_mels, use_preemphasis=False):
+        if use_preemphasis:
+             pre_y = self.preemphasis(y)
+        else:
+             pre_y=y
         D = self._stft(pre_y, sample_rate)
         S = self._amp_to_db(self._linear_to_mel(np.abs(D), sample_rate, num_mels))
         return self._normalize(S).transpose()
@@ -76,7 +79,7 @@ class MelVocoder:
 
     def _build_mel_basis(self, sample_rate, num_mels):
         n_fft = 1024
-        return librosa.filters.mel(sample_rate, n_fft, n_mels=num_mels)
+        return librosa.filters.mel(sample_rate, n_fft, n_mels=num_mels, fmax=7600)
 
     def _normalize(self, S):
         min_level_db = -100.0
@@ -89,7 +92,7 @@ class MelVocoder:
         return n_fft, hop_length, win_length
 
     def _amp_to_db(self, x):
-        reference = 0.0
+        reference = 20.0
         return 20 * np.log10(np.maximum(1e-5, x)) - reference
 
     def griffinlim(self, spectrogram, n_iter=100, sample_rate=16000):

@@ -106,29 +106,50 @@ def kl_loss(mu_q, logs_q, mu_p, logs_p, regularization=True, size_average=True):
         return loss_tot.sum(), KL_loss.sum(), reg_loss.sum()
 
 
+from cube2.networks.stft import STFT
+
+stft_func = STFT()
+stft_func.to('cuda:0')
+
+
 def power_loss(p_y, t_y):
-    fft_orig = torch.stft(t_y.reshape(-1), n_fft=512,
-                          window=torch.hann_window(window_length=512).to('cuda:0'))
-    fft_pred = torch.stft(p_y.reshape(-1), n_fft=512,
-                          window=torch.hann_window(window_length=512).to('cuda:0'))
-    real_orig = fft_orig[:, :, 0]
-    im_org = fft_orig[:, :, 1]
-    power_orig = torch.sqrt(torch.pow(real_orig, 2) + torch.pow(im_org, 2))
-    real_pred = fft_pred[:, :, 0]
-    im_pred = fft_pred[:, :, 1]
-    power_pred = torch.sqrt(torch.pow(real_pred, 2) + torch.pow(im_pred, 2))
+    # fft_orig = torch.stft(t_y.reshape(-1), n_fft=1024, hop_length=32, center=False,
+    #                      window=torch.hann_window(window_length=1024).to('cuda:0'))
+    # fft_pred = torch.stft(p_y.reshape(-1), n_fft=1024, hop_length=32, center=False,
+    #                      window=torch.hann_window(window_length=1024).to('cuda:0'))
+    # fft_orig = torch.stft(t_y.reshape(-1), n_fft=1024, hop_length=256, win_length=1024)
+    # fft_pred = torch.stft(p_y.reshape(-1), n_fft=1024, hop_length=256, win_length=1024)
+
+    # power_orig = torch.sqrt(torch.clamp(fft_orig.pow(2).sum(-1), min=1e-10))
+    # power_pred = torch.sqrt(torch.clamp(fft_pred.pow(2).sum(-1), min=1e-10))
+    power_orig, _ = stft_func.transform(t_y.reshape(1, -1))
+    power_pred, _ = stft_func.transform(p_y.reshape(1, -1))
+
     return torch.pow(power_orig - power_pred, 2).mean()
 
 
-def _eval(model, dataset, params):
+def _eval(model, dataset, params, teacher=None):
     model.eval()
     lss_gauss = 0
     with torch.no_grad():
         for step in tqdm.tqdm(range(100)):
             x, mgc = dataset.get_batch(batch_size=params.batch_size)
-            mean, logvar, pred_y = model(mgc, x=x)
-            loss_gauss = gaussian_loss(mean, logvar, x)
-            lss_gauss += loss_gauss.item()
+            if teacher is None:
+                mean, logvar, pred_y = model(mgc, x=x)
+                loss_gauss = gaussian_loss(mean, logvar, x)
+                lss_gauss += loss_gauss.item()
+            else:
+                mean, logvar, pred_y = model(mgc, x=x)
+                m_t, l_t, p_t = teacher(mgc, x=pred_y.reshape(x.size()))
+                m_s = mean.reshape(m_t.size())
+                l_s = logvar.reshape(m_t.size())
+                m_t = m_t.detach()
+                l_t = l_t.detach()
+                loss_gauss = kl_loss(m_s, l_s, m_t, l_t)[0]
+                # loss_gauss = 0
+                loss_gauss += power_loss(pred_y.view(-1), x.view(-1))
+                # loss_gauss += gaussian_loss(mean, logvar, x)
+                lss_gauss += loss_gauss.item()
     return lss_gauss / 100
 
 
@@ -146,13 +167,15 @@ def _start_train(params):
     if params.model == 'teacher':
         cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1, use_noise=False)
         model_name = 'data/cube-teacher'
+        cubenet_teacher = None
     else:
         cubenet_teacher = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1, use_noise=False)
         model_name = 'data/cube-teacher'
         cubenet_teacher.load('{0}.best'.format(model_name))
         cubenet_teacher.to('cuda:0')
         cubenet_teacher.eval()
-        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, use_noise=True)
+        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, use_noise=True, lstm_size=500,
+                           lstm_layers=5)
         model_name = 'data/cube-student'
     if params.resume:
         cubenet.load('{0}.best'.format(model_name))
@@ -161,7 +184,7 @@ def _start_train(params):
 
     test_steps = 500
     global_step = 0
-    best_gloss = _eval(cubenet, devset, params)
+    best_gloss = _eval(cubenet, devset, params, teacher=cubenet_teacher)
     while patience_left > 0:
         cubenet.train()
         total_loss_gauss = 0.0
@@ -181,7 +204,9 @@ def _start_train(params):
                 m_t = m_t.detach()
                 l_t = l_t.detach()
                 loss_gauss = kl_loss(m_s, l_s, m_t, l_t)[0]
-                loss_gauss += power_loss(pred_y, x)
+                # loss_gauss = 0
+                loss_gauss += power_loss(pred_y.view(-1), x.view(-1))
+                # loss_gauss += gaussian_loss(mean, logvar, x)
 
             loss = loss_gauss
             optimizer_gen.zero_grad()
@@ -193,7 +218,7 @@ def _start_train(params):
 
             progress.set_description('LOSS={0:.4}'.format(lss_gauss))
 
-        g_loss = _eval(cubenet, devset, params)
+        g_loss = _eval(cubenet, devset, params, teacher=cubenet_teacher)
         sys.stdout.flush()
         sys.stderr.flush()
         sys.stdout.write(
@@ -219,7 +244,8 @@ def _test_synth(params):
         cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1, use_noise=False)
         model_name = 'data/cube-teacher'
     else:
-        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, use_noise=True)
+        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, use_noise=True, lstm_size=500,
+                           lstm_layers=5)
         model_name = 'data/cube-student'
 
     cubenet.load('{0}.best'.format(model_name))
@@ -230,6 +256,7 @@ def _test_synth(params):
     start = time.time()
     with torch.no_grad():
         mean, logvar, pred_y = cubenet(mgc, temperature=params.temperature, eps_min=-12)
+
     end = time.time()
     synth = torch.clamp(pred_y.view(-1) * 32767, min=-32767, max=32767)
     from cube2.io_modules.dataset import DatasetIO
@@ -237,6 +264,7 @@ def _test_synth(params):
     dio.write_wave('gan.wav', synth.detach().cpu().numpy(), 16000, dtype=np.int16)
     synth = x.view(-1) * 32767
     dio.write_wave('orig.wav', synth.detach().cpu().numpy(), 16000, dtype=np.int16)
+
     sys.stdout.write(
         'Actual execution time took {0} for {1} seconds of audio.\n'.format(end - start, len(x.view(-1)) / 16000))
 

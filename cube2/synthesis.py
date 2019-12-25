@@ -47,7 +47,7 @@ def synthesize(params):
     import time
     from cube2.io_modules.dataset import DatasetIO, Encodings
     from cube2.networks.text2mel import Text2Mel
-    from cube2.networks.vocoder import CubeNet
+    from cube2.networks.vocoder import CubeNet2
     from os.path import exists
     if params.g2p is not None:
         from cube2.networks.g2p import G2P
@@ -67,10 +67,18 @@ def synthesize(params):
     text2mel.eval()
     # from ipdb import set_trace
     # set_trace()
-    cubenet = CubeNet()
-    cubenet.load('{0}'.format(params.cubenet))
-    cubenet.to(params.device)
-    cubenet.eval()
+    if params.model == 'teacher':
+        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1, use_noise=False)
+        cubenet.load('{0}-teacher.best'.format(params.cubenet))
+        cubenet.to(params.device)
+        cubenet.eval()
+    else:
+        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, use_noise=True, lstm_size=500,
+                           lstm_layers=2)
+        cubenet.load('{0}-student.best'.format(params.cubenet))
+        cubenet.to(params.device)
+        cubenet.eval()
+
     with torch.no_grad():
         if params.g2p:
             text = open(params.txt_file).read().strip()
@@ -175,8 +183,9 @@ if __name__ == '__main__':
                       help='Use this device')
     parser.add_option('--text2mel', dest='text2mel', action='store', default='data/text2mel',
                       help='default: data/text2mel')
-    parser.add_option('--cubenet', dest='cubenet', action='store', default='data/cube.best',
+    parser.add_option('--cubenet', dest='cubenet', action='store', default='data/cube',
                       help='default: data/cube')
+    parser.add_option('--cubenet-model-type', dest='model', choices=['teacher', 'student'], default='student')
     parser.add_option('--output', dest='output', action='store', default='test.wav',
                       help='test.wav')
     parser.add_option('--g2p', dest='g2p', action='store')

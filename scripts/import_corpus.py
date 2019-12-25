@@ -41,6 +41,11 @@ if __name__ == '__main__':
     (params, _) = parser.parse_args(sys.argv)
 
 
+    def _normalize(data):
+        m = np.max(np.abs(data))
+        data = (data / m) * 0.999
+        return data
+
     def array2file(a, filename):
         np.save(filename, a)
 
@@ -188,6 +193,7 @@ if __name__ == '__main__':
             copyfile(join(base_folder, txt_name), join('data/processed/train', tgt_txt_name))
             # WAVE
             data, sample_rate = dio.read_wave(join(base_folder, wav_name), sample_rate=params.target_sample_rate)
+            data = _normalize(data)
             mgc = vocoder.melspectrogram(data, sample_rate=params.target_sample_rate, num_mels=params.mgc_order)
             # SPECT
             render_spectrogram(mgc, join('data/processed/train', tgt_spc_name))
@@ -230,6 +236,7 @@ if __name__ == '__main__':
             copyfile(join(base_folder, txt_name), join('data/processed/dev', tgt_txt_name))
             # WAVE
             data, sample_rate = dio.read_wave(join(base_folder, wav_name), sample_rate=params.target_sample_rate)
+            data = _normalize(data)
             mgc = vocoder.melspectrogram(data, sample_rate=params.target_sample_rate, num_mels=params.mgc_order)
             # SPECT
             render_spectrogram(mgc, join('data/processed/dev', tgt_spc_name))
