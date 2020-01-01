@@ -22,31 +22,22 @@ class UpsampleNet(nn.Module):
     def __init__(self, input_size, output_size, upsample_scales):
         super(UpsampleNet, self).__init__()
         self.upsample_conv = nn.ModuleList()
-        for s in upsample_scales:
-            convt = nn.ConvTranspose2d(1, 1, (3, 2 * s), padding=(1, s // 2), stride=(1, s))
-            convt = nn.utils.weight_norm(convt)
-            nn.init.kaiming_normal_(convt.weight)
-            self.upsample_conv.append(convt)
-            self.upsample_conv.append(nn.ReLU())
-            # self.upsample_conv.append(nn.Dropout(0.5))
-        self.output_transform = nn.Linear(input_size, output_size)
+        isize = input_size
+        self.output_size = output_size
+        total = 1
+        for scale in upsample_scales:
+            total *= scale
+        for s in range(total):
+            self.upsample_conv.append(nn.Sequential(nn.Linear(input_size, output_size), nn.ReLU()))
 
     def forward(self, x):
-        # if self.training:
-        #     noise = torch.randn_like(x)
-        #     noise = noise * 0.01
-        #     # noise += 1
-        #     x = x + noise
         x = torch.clamp(x, min=0, max=1)
-        c = x.permute(0, 2, 1)
-        if self.upsample_conv is not None:
-            # B x 1 x C x T'
-            c = c.unsqueeze(1)
-            for f in self.upsample_conv:
-                c = f(c)
-            # B x C x T
-            c = c.squeeze(1)
-        return self.output_transform(c.permute(0, 2, 1))
+        o_list = []
+        for trans in self.upsample_conv:
+            o_list.append(trans(x))
+        o_list = torch.cat(o_list, dim=2)
+        o_list = o_list.view(o_list.shape[0], -1, self.output_size)
+        return o_list
 
 
 class Attention(nn.Module):

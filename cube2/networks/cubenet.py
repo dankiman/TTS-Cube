@@ -134,7 +134,7 @@ def _eval(model, dataset, params):
     with torch.no_grad():
         for step in tqdm.tqdm(range(100)):
             x, mgc = dataset.get_batch(batch_size=params.batch_size)
-            mean, logvar, pred_y = model(mgc, x=x)
+            mean, logvar, pred_y, _, _ = model(mgc, x=x)
             loss_gauss = gaussian_loss(mean, logvar, x)
             lss_gauss += loss_gauss.item()
     return lss_gauss / 100
@@ -155,7 +155,7 @@ def _start_train(params):
         cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1)
         model_name = 'data/cube-single'
     else:
-        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16)
+        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4], output_samples=4)
         model_name = 'data/cube-multi'
     if params.resume:
         cubenet.load('{0}.best'.format(model_name))
@@ -174,8 +174,8 @@ def _start_train(params):
             sys.stderr.flush()
             global_step += 1
             x, mgc = trainset.get_batch(batch_size=params.batch_size)
-            mean, logvar, pred_y = cubenet(mgc, x=x)
-            loss_gauss = gaussian_loss(mean, logvar, x)
+            mean, logvar, pred_y, mean_nc, logvar_nc = cubenet(mgc, x=x)
+            loss_gauss = gaussian_loss(mean, logvar, x) + gaussian_loss(mean_nc, logvar_nc, x)
 
             loss = loss_gauss
             optimizer_gen.zero_grad()
@@ -209,11 +209,11 @@ def _start_train(params):
 def _test_synth(params):
     devset = Dataset("data/processed/dev")
     devset = DataLoader(devset)
-    if params.model == 'teacher':
+    if params.model == 'single':
         cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1)
         model_name = 'data/cube-single'
     else:
-        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16)
+        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4], output_samples=4)
         model_name = 'data/cube-multi'
 
     cubenet.load('{0}.best'.format(model_name))
@@ -223,7 +223,7 @@ def _test_synth(params):
     x, mgc = devset.get_batch(batch_size=params.batch_size, device=params.device, mini_batch_size=64)
     start = time.time()
     with torch.no_grad():
-        mean, logvar, pred_y = cubenet(mgc, temperature=params.temperature, eps_min=-12)
+        mean, logvar, pred_y, mnc, lnc = cubenet(mgc, temperature=params.temperature, eps_min=-7)
 
     end = time.time()
     synth = torch.clamp(pred_y.view(-1) * 32767, min=-32767, max=32767)

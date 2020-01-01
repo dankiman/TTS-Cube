@@ -67,13 +67,13 @@ def synthesize(params):
     text2mel.eval()
     # from ipdb import set_trace
     # set_trace()
-    if params.model == 'teacher':
+    if params.model == 'single':
         cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1)
         cubenet.load('{0}-single.best'.format(params.cubenet))
         cubenet.to(params.device)
         cubenet.eval()
     else:
-        cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, lstm_size=500)
+        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4], output_samples=4, lstm_size=500)
         cubenet.load('{0}-multi.best'.format(params.cubenet))
         cubenet.to(params.device)
         cubenet.eval()
