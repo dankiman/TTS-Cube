@@ -56,7 +56,7 @@ class DataLoader:
         self._frame_index += 1
         return result
 
-    def get_batch(self, batch_size, mini_batch_size=16, device='cuda:0'):
+    def get_batch(self, batch_size, mini_batch_size=64, device='cuda:0'):
         batch_mgc = []
         batch_x = []
         while len(batch_mgc) < batch_size:
@@ -155,7 +155,8 @@ def _start_train(params):
         cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1)
         model_name = 'data/cube-single'
     else:
-        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4], output_samples=4)
+        # cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, lstm_size=800)
+        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4], output_samples=4, lstm_size=500)
         model_name = 'data/cube-multi'
     if params.resume:
         cubenet.load('{0}.best'.format(model_name))
@@ -175,7 +176,7 @@ def _start_train(params):
             global_step += 1
             x, mgc = trainset.get_batch(batch_size=params.batch_size)
             mean, logvar, pred_y, mean_nc, logvar_nc = cubenet(mgc, x=x)
-            loss_gauss = gaussian_loss(mean, logvar, x) + gaussian_loss(mean_nc, logvar_nc, x)
+            loss_gauss = gaussian_loss(mean, logvar, x) + gaussian_loss(mean_nc, logvar_nc, x) * params.aux_loss_weight
 
             loss = loss_gauss
             optimizer_gen.zero_grad()
@@ -213,7 +214,8 @@ def _test_synth(params):
         cubenet = CubeNet2(upsample_scales_input=[4, 4, 4, 4], output_samples=1)
         model_name = 'data/cube-single'
     else:
-        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4], output_samples=4)
+        # cubenet = CubeNet2(upsample_scales_input=[4, 4], output_samples=16, lstm_size=800)
+        cubenet = CubeNet2(upsample_scales_input=[4, 4, 4], output_samples=4, lstm_size=500)
         model_name = 'data/cube-multi'
 
     cubenet.load('{0}.best'.format(model_name))
@@ -250,6 +252,7 @@ if __name__ == '__main__':
     parser.add_option("--device", action="store", dest="device", default='cuda:0')
     parser.add_option("--lr", action="store", dest="lr", default=1e-3, type=float)
     parser.add_option("--model", action="store", dest='model', choices=['single', 'multi'], default='single')
+    parser.add_option("--aux-loss-weight", action="store", dest='aux_loss_weight', type='float', default=1.0)
 
     (params, _) = parser.parse_args(sys.argv)
     if params.test:

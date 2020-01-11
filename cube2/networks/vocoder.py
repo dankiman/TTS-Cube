@@ -31,9 +31,15 @@ class CubeNetOLD(nn.Module):
         self.output = nn.Linear(lstm_size, 2)
 
     def synthesize(self, mgc, batch_size=16, temperature=0.8):
-        empty_slots = np.zeros(((mgc.shape[0] // batch_size) * batch_size + batch_size - mgc.shape[0], mgc.shape[1]))
-        mgc = np.concatenate((mgc, empty_slots), axis=0)
-        c = torch.tensor(mgc, dtype=torch.float32).view(-1, batch_size, mgc.shape[1]).to(self.output.weight.device.type)
+        if mgc.shape[0] // batch_size != 0:
+            empty_slots = np.zeros(
+                ((mgc.shape[0] // batch_size) * batch_size + batch_size - mgc.shape[0], mgc.shape[1]))
+            mgc = np.concatenate((mgc, empty_slots), axis=0)
+            c = torch.tensor(mgc, dtype=torch.float32).view(-1, batch_size, mgc.shape[1]).to(
+                self.output.weight.device.type)
+        else:
+            c = torch.tensor(mgc, dtype=torch.float32).unsqueeze(0).to(
+                self.output.weight.device.type)
         _, _, signal = self.forward(c, temperature=temperature, eps_min=-20)
 
         return np.array(np.clip(signal.detach().cpu().view(-1).numpy(), -1.0, 1.0) * 32500, dtype=np.int16)
@@ -111,10 +117,16 @@ class CubeNet2(nn.Module):
 
     def synthesize(self, mgc, batch_size=16, temperature=0.8):
         total_audio_size = mgc.shape[0] * 256
-        empty_slots = np.zeros(((mgc.shape[0] // batch_size) * batch_size + batch_size - mgc.shape[0], mgc.shape[1]))
-        mgc = np.concatenate((mgc, empty_slots), axis=0)
-        c = torch.tensor(mgc, dtype=torch.float32).view(-1, batch_size, mgc.shape[1]).to(self.output.weight.device.type)
-        _, _, signal, _, _ = self.forward(c, temperature=temperature, eps_min=-20)
+        if mgc.shape[0] // batch_size != 0:
+            empty_slots = np.zeros(
+                ((mgc.shape[0] // batch_size) * batch_size + batch_size - mgc.shape[0], mgc.shape[1]))
+            mgc = np.concatenate((mgc, empty_slots), axis=0)
+            c = torch.tensor(mgc, dtype=torch.float32).view(-1, batch_size, mgc.shape[1]).to(
+                self.output.weight.device.type)
+        else:
+            c = torch.tensor(mgc, dtype=torch.float32).unsqueeze(0).to(
+                self.output.weight.device.type)
+        _, _, signal, _, _ = self.forward(c, temperature=temperature, eps_min=-7)
 
         signal = signal.detach().cpu().view(-1).numpy()[:total_audio_size]
         # s_min = np.min(signal)
@@ -201,9 +213,9 @@ class CubeNet2(nn.Module):
                     zz_list.append(torch.cat(zz_cache, dim=-1))
                 else:
                     zz_list.append(zz.unsqueeze(2))
-                output_nc = self.output_nc(rnn_output)
-                mean_nc = output_nc[:, :, :self.output_samples]
-                logvar_nc = output_nc[:, :, self.output_samples:]
+                # output_nc = self.output_nc(rnn_output)
+                # mean_nc = output_nc[:, :, :self.output_samples]
+                # logvar_nc = output_nc[:, :, self.output_samples:]
                 # from ipdb import set_trace
                 # set_trace()
                 x = zz_list[-1]

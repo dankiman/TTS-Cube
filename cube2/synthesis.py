@@ -96,7 +96,7 @@ def synthesize(params):
     mgc, att = _trim(mgc[0].detach().cpu().numpy(), att[0].detach().cpu().numpy())
     with torch.no_grad():
         start_cubenet = time.time()
-        wav = cubenet.synthesize(mgc, batch_size=128,
+        wav = cubenet.synthesize(mgc, batch_size=64,
                                  temperature=params.temperature)
         stop_cubenet = time.time()
 
